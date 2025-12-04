@@ -31,29 +31,31 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 # ============================================================================
 # Configure data & model
 # ============================================================================
-data = pd.read_csv("./../data/synth_data_for_training.csv")
-features_description = pd.read_csv("./../data/data_description.csv", encoding="latin-1")
+_data_df = pd.read_csv("./../data/synth_data_for_training.csv")
+_features_description = pd.read_csv("./../data/data_description.csv", encoding="latin-1")
 
-columns_mapper = dict(zip(features_description['Feature (nl)'], features_description['Feature (en)']))
-data = data.rename(columns=columns_mapper)
+_columns_mapper = dict(zip(_features_description['Feature (nl)'], _features_description['Feature (en)']))
+_data_df = _data_df.rename(columns=_columns_mapper)
 
-y = data['checked']
-X = data.drop(['checked'], axis=1)
-X = X.astype(np.float32)
+_data_y = _data_df['checked']
+_data_X = _data_df.drop(['checked'], axis=1)
+_data_X = _data_X.astype(np.float32)
 
 # Let's split the dataset into train and test
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+_data_X_train, _data_X_test, _data_y_train, _data_y_test = train_test_split(
+    _data_X, _data_y, test_size=0.25, random_state=42
+)
 
-selector = VarianceThreshold()
-selector.fit_transform(X_train, y_train)
+_selector = VarianceThreshold()
+_selector.fit_transform(_data_X_train, _data_y_train)
 
 # Define a gradient boosting classifier
-classifier = GradientBoostingClassifier(n_estimators=100, learning_rate=1.0, max_depth=1, random_state=0)
+_classifier = GradientBoostingClassifier(n_estimators=100, learning_rate=1.0, max_depth=1, random_state=0)
 
 # Create a pipeline object with our selector and classifier
 # TODO: most of the tests require passing a unfitted model
 # TODO: update code so that fitted models are also accepted
-pipeline = Pipeline(steps=[('feature selection', selector), ('classification', classifier)])
+_default_pipeline = Pipeline(steps=[('feature selection', _selector), ('classification', _classifier)])
 
 
 # ============================================================================
@@ -215,9 +217,9 @@ def cohen_d_paired(a: np.ndarray, b: np.ndarray) -> float:
 # ============================================================================
 
 def test_pipeline_stability_cross_validation(
-        X: pd.DataFrame = X_train,
-        y: pd.Series = y_train,
-        pipeline = pipeline,
+        X: pd.DataFrame = _data_X_train,
+        y: pd.Series = _data_y_train,
+        pipeline = _default_pipeline,
         n_splits: int = 5,
         max_range: float = 0.03,  # Max allowed difference between best and worst fold
         max_std: float = 0.01  # Max allowed standard deviation
@@ -249,18 +251,18 @@ def test_pipeline_stability_cross_validation(
     print("-" * 45)
 
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X, y), start=1):
-        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+        X_fold_train, X_fold_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_fold_train, y_fold_val = y.iloc[train_idx], y.iloc[val_idx]
 
         # Clone to ensure fresh model each fold
         model = clone(pipeline)
-        model.fit(X_train, y_train)
+        model.fit(X_fold_train, y_fold_train)
 
         # Score validation set using utility functions
-        scores = get_prediction_scores(model, X_val)
-        probs, _ = get_prediction_probabilities_and_confidence(model, X_val)
-        preds = model.predict(X_val)
-        score = calculate_auc_or_accuracy(y_val.values, probs, preds)
+        scores = get_prediction_scores(model, X_fold_val)
+        probs, _ = get_prediction_probabilities_and_confidence(model, X_fold_val)
+        preds = model.predict(X_fold_val)
+        score = calculate_auc_or_accuracy(y_fold_val.values, probs, preds)
 
         fold_scores.append(score)
         print(f"{fold_idx:>6} {score:>10.6f} {len(train_idx):>12} {len(val_idx):>10}")
@@ -304,8 +306,8 @@ def test_pipeline_stability_cross_validation(
 # ============================================================================
 
 def test_predictions_invariant_to_dtype_casting(
-        X: pd.DataFrame = X_test,
-        model = pipeline,
+        X: pd.DataFrame = _data_X_test,
+        model = _default_pipeline,
         source_dtype: str = 'float32',
         target_dtype: str = 'float16'
 ) -> None:
@@ -324,7 +326,7 @@ def test_predictions_invariant_to_dtype_casting(
     Raises:
         AssertionError: If predictions differ after casting
     """
-    model.fit(X_train, y_train)
+    model.fit(_data_X_train, _data_y_train)
 
     # Find columns with source dtype
     cols_to_cast = X.select_dtypes(include=[source_dtype]).columns.tolist()
@@ -408,10 +410,10 @@ def test_predictions_invariant_to_dtype_casting(
 # ============================================================================
 
 def test_feature_perturbation_robustness(
-        X: pd.DataFrame = X_test,
-        y: Optional[np.ndarray] = y_test,
-        model = pipeline,
-        numeric_features: Sequence[str] = X_test.columns,
+        X: pd.DataFrame = _data_X_test,
+        y: Optional[np.ndarray] = _data_y_test,
+        model = _default_pipeline,
+        numeric_features: Sequence[str] = _data_X_test.columns,
         noise_scale: float = 0.2,  # Fraction of IQR for noise
         median_change_threshold: float = 0.01,
         p95_change_threshold: float = 0.05,
@@ -452,7 +454,7 @@ def test_feature_perturbation_robustness(
     Returns:
         (results_df, failures_df): Complete results and failures with diagnostics
     """
-    model.fit(X_train, y_train)
+    model.fit(_data_X_train, _data_y_train)
 
     # Validate inputs
     missing_features = [f for f in numeric_features if f not in X.columns]
@@ -649,10 +651,10 @@ def _permutation_importance_single_feature(
 # ============================================================================
 
 def test_model_performance_by_cluster(
-        X: pd.DataFrame = X_train,
-        y: pd.Series = y_train,
-        pipeline = pipeline,
-        features_for_clustering: Sequence[str] = X_train.columns,
+        X: pd.DataFrame = _data_X_train,
+        y: pd.Series = _data_y_train,
+        pipeline = _default_pipeline,
+        features_for_clustering: Sequence[str] = _data_X_train.columns,
         k: Optional[int] = None,
         k_range: Tuple[int, int] = (8, 12),
         samples_per_cluster: int = 50,
@@ -795,14 +797,14 @@ def test_model_performance_by_cluster(
     all_indices = np.arange(len(X))
     train_indices = np.setdiff1d(all_indices, unique_test_indices)
 
-    X_train = X.iloc[train_indices]
-    y_train = y.iloc[train_indices]
+    X_cluster_train = X.iloc[train_indices]
+    y_cluster_train = y.iloc[train_indices]
 
     print(f"\nTrain size: {len(train_indices)} | Test size: {len(unique_test_indices)}")
 
     # Train model
     model = clone(pipeline)
-    model.fit(X_train, y_train)
+    model.fit(X_cluster_train, y_cluster_train)
 
     # Evaluate per cluster
     cluster_aucs = []
@@ -883,9 +885,9 @@ def test_model_performance_by_cluster(
 # ============================================================================
 
 def test_permutation_group_importance(
-        X: pd.DataFrame = X_test,
-        y: np.ndarray = y_test,
-        model = pipeline,
+        X: pd.DataFrame = _data_X_test,
+        y: np.ndarray = _data_y_test,
+        model = _default_pipeline,
         group_size: int = 50,
         feature_dtype: str = 'numeric',
         n_permutations: int = 5,
@@ -983,6 +985,7 @@ def test_permutation_group_importance(
             mean_permuted_auc = float(np.mean(valid_aucs))
 
             # Empirical p-value: fraction of permuted >= baseline
+            # TODO: fix this, seems like it depends on the number of permuations, n_permutations
             p_value = (np.sum(valid_aucs >= baseline_auc) + 1) / (valid_mask.sum() + 1)
 
         delta = baseline_auc - mean_permuted_auc if not np.isnan(mean_permuted_auc) else np.nan
