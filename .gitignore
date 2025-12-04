@@ -1,0 +1,23 @@
+# macOS junk
+*.DS_Store
+
+# JetBrains / IntelliJ
+.idea/
+
+# VS Code
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Environments
+venv/
+.venv/
+
+# uv
+uv.lock
