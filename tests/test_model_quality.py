@@ -96,6 +96,10 @@ def get_prediction_probabilities_and_confidence(
     Confidence defined as max predicted probability per sample.
     For non-probabilistic models, uses decision function or returns ones.
 
+    Args:
+        model: A fitted classification model supporting predict_proba, decision_function, or predict.
+        X (pd.DataFrame): Feature matrix for which to compute probabilities and confidence.
+
     Returns:
         (probabilities_matrix_or_None, confidence_per_sample)
     """
@@ -133,6 +137,9 @@ def calculate_auc_or_accuracy(
         y_true: True labels
         probs: Probability matrix (can be None)
         preds: Predictions for accuracy fallback (optional)
+
+    Returns:
+        float: ROC AUC score if probabilities are provided, otherwise accuracy score.
     """
     if probs is None:
         if preds is None:
@@ -259,7 +266,6 @@ def test_pipeline_stability_cross_validation(
         model.fit(X_fold_train, y_fold_train)
 
         # Score validation set using utility functions
-        scores = get_prediction_scores(model, X_fold_val)
         probs, _ = get_prediction_probabilities_and_confidence(model, X_fold_val)
         preds = model.predict(X_fold_val)
         score = calculate_auc_or_accuracy(y_fold_val.values, probs, preds)

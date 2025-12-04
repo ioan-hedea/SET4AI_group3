@@ -311,7 +311,7 @@ def test_age_distribution_matches_official(
         age_data,
         bins=bin_edges,
         labels=AGE_BIN_LABELS,
-        right=True,
+        right=False,
         include_lowest=True
     )
 
