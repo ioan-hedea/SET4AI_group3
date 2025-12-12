@@ -7,9 +7,10 @@ from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import accuracy_score
 import onnxruntime as rt
 
-DATA_PATH = Path("data/synth_data_for_training.csv")
-MODEL_1_PATH = Path("group1/model_1.onnx")
-MODEL_2_PATH = Path("group1/model_2.onnx")
+ROOT = Path(__file__).resolve().parents[1]
+DATA_PATH = ROOT / "data" / "synth_data_for_training.csv"
+MODEL_1_PATH = Path("model_1.onnx")
+MODEL_2_PATH = Path("model_2.onnx")
 bad_model = GradientBoostingClassifier(
     n_estimators=200, learning_rate=0.05, max_depth=3, random_state=0
 )

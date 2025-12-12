@@ -1,0 +1,12 @@
+[
+  {"image": "fish.jpg", "label": "goldfish"},
+  {"image": "castle.jpg", "label": "castle"},
+  {"image": "cup.jpeg", "label": "cup"},
+  {"image": "goldfinch.jpeg", "label": "hummingbird"},
+  {"image": "seashore.jpeg", "label": "seashore"},
+  {"image": "bubble.jpeg", "label": "bubble"},
+  {"image": "goblet.jpeg", "label": "goblet"},
+  {"image": "hay.jpeg", "label": "hay"},
+  {"image": "water_bottle.jpeg", "label": "water jug"},
+  {"image": "viaduct.jpeg", "label": "viaduct"}
+]

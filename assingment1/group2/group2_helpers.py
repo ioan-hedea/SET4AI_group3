@@ -6,9 +6,9 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from sklearn.metrics import accuracy_score, confusion_matrix
 
-DATA_PATH_B   = Path("data/synth_data_for_training.csv")
-MODEL_B1_PATH = Path("group2/model_1.onnx")  # BAD
-MODEL_B2_PATH = Path("group2/model_2.onnx")  # GOOD
+DATA_PATH_B   = Path("../data/synth_data_for_training.csv")
+MODEL_B1_PATH = Path("model_1.onnx")  # BAD
+MODEL_B2_PATH = Path("model_2.onnx")  # GOOD
 
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)

@@ -1,0 +1,21 @@
+# Python version
+# (this is just documentation for the grader; pip ignores this line)
+python==3.11
+
+# Core numerical / data libraries
+numpy==2.3.5
+pandas==2.3.3
+
+# Modelling
+scikit-learn==1.7.2
+
+# Export to ONNX
+onnx==1.19.1
+onnxruntime==1.23.2
+skl2onnx==1.19.1
+
+# Plotting (used in visualizations)
+matplotlib==3.10.7
+
+# Testing
+pytest==9.0.1
