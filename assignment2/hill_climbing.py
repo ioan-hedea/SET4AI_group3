@@ -39,7 +39,27 @@ def compute_fitness(
     """
 
     # TODO (student)
-    raise NotImplementedError("compute_fitness must be implemented by the student.")
+    # Get model predictions
+    # Assuming model returns probabilities for each class
+    # print(image_array.shape)
+    # exit()
+    predictions = model.predict(image_array)
+    
+    # Get the predicted label (highest probability)
+    predicted_label = model.get_label(predictions)
+    
+    # Get probability of target label
+    target_prob = model.get_probability(predictions, target_label)
+    
+    # If model predicts target label, fitness is the probability (we want to maximize it)
+    # Otherwise, fitness is negative of the predicted label's probability
+    if predicted_label == target_label:
+        fitness = target_prob
+    else:
+        predicted_prob = model.get_probability(predictions, predicted_label)
+        fitness = -predicted_prob
+    
+    return fitness
 
 
 # ============================================================
@@ -82,7 +102,18 @@ def mutate_seed(
     """
 
     # TODO (student)
-    raise NotImplementedError("mutate_seed must be implemented by the student.")
+    neighbors = []
+    max_perturbation = 255 * epsilon
+    for channel in range(seed.shape[2]):
+        neighbor = seed.copy()
+        # Perturb entire channel
+        perturbation = np.random.uniform(-max_perturbation, max_perturbation, 
+                                        (seed.shape[0], seed.shape[1]))
+        neighbor[:, :, channel] = seed[:, :, channel] + perturbation
+        neighbor[:, :, channel] = np.clip(neighbor[:, :, channel], 0, 255)
+        neighbors.append(neighbor)
+    
+    return neighbors
 
 
 
@@ -109,7 +140,18 @@ def select_best(
     """
 
     # TODO (student)
-    raise NotImplementedError("select_best must be implemented by the student.")
+    best_image = None
+    best_fitness = float('inf')  # Start with worst possible fitness
+    
+    for candidate in candidates:
+        fitness = compute_fitness(candidate, model, target_label)
+        
+        # Lower fitness is better
+        if fitness < best_fitness:
+            best_fitness = fitness
+            best_image = candidate.copy()
+    
+    return best_image, best_fitness
 
 
 # ============================================================
@@ -143,7 +185,66 @@ def hill_climb(
     """
 
     # TODO (team work)
-    raise NotImplementedError("hill_climb must be implemented by the team.")
+    current_image = initial_seed.copy()
+    current_fitness = compute_fitness(current_image, model, target_label)
+    
+    max_perturbation = 255 * epsilon
+    no_improvement_count = 0
+    max_no_improvement = 50  # Stop if no improvement for 50 iterations
+    
+    print(f"Initial fitness: {current_fitness:.4f}")
+    
+    for iteration in range(iterations):
+        # Generate neighbors from current image
+        neighbors = mutate_seed(current_image, epsilon)
+        
+        # Enforce L∞ constraint relative to ORIGINAL seed
+        valid_neighbors = []
+        for neighbor in neighbors:
+            # Check if neighbor satisfies L∞ constraint relative to initial_seed
+            diff = np.abs(neighbor - initial_seed)
+            if np.max(diff) <= max_perturbation:
+                valid_neighbors.append(neighbor)
+            else:
+                # Clip to satisfy constraint
+                neighbor_clipped = np.clip(
+                    neighbor,
+                    initial_seed - max_perturbation,
+                    initial_seed + max_perturbation
+                )
+                neighbor_clipped = np.clip(neighbor_clipped, 0, 255)
+                valid_neighbors.append(neighbor_clipped)
+        
+        # Add current image to candidates (elitism)
+        candidates = [current_image] + valid_neighbors
+        
+        # Select best candidate
+        best_image, best_fitness = select_best(candidates, model, target_label)
+        
+        # Check if fitness improved
+        if best_fitness < current_fitness:
+            current_image = best_image.copy()
+            current_fitness = best_fitness
+            no_improvement_count = 0
+            
+            if iteration % 10 == 0:
+                print(f"Iteration {iteration}: fitness = {current_fitness:.4f}")
+            
+            # Check if target is confidently reached (fitness > 0 means target is predicted)
+            if current_fitness > 0.9:  # High confidence in target class
+                print(f"Target reached with confidence {current_fitness:.4f} at iteration {iteration}")
+                break
+        else:
+            no_improvement_count += 1
+        
+        # Stop if no improvement for too long
+        if no_improvement_count >= max_no_improvement:
+            print(f"No improvement for {max_no_improvement} iterations. Stopping.")
+            break
+    
+    print(f"Final fitness: {current_fitness:.4f}")
+    return current_image, current_fitness
+    
 
 
 # ============================================================
