@@ -17,147 +17,111 @@ from typing import List, Tuple
 from keras.applications import vgg16
 from keras.applications.imagenet_utils import decode_predictions
 from keras.utils import array_to_img, load_img, img_to_array
+from keras.applications.vgg16 import preprocess_input
+import numpy as np
+import torch
+from typing import List, Tuple
+# ImageNet normalization for torchvision models
+_IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+_IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
 
 # ============================================================
-# 1. FITNESS FUNCTION
+# 1. FITNESS FUNCTION (KERAS)
 # ============================================================
-
 def compute_fitness(
     image_array: np.ndarray,
     model,
     target_label: str
 ) -> float:
     """
-    Compute fitness of an image for hill climbing.
-
-    Fitness definition (LOWER is better):
-        - If the model predicts target_label:
-              fitness = probability(target_label)
-        - Otherwise:
-              fitness = -probability(predicted_label)
+    Fitness (LOWER is better):
+      - If top-1 == target_label: fitness = P(target_label)
+      - Else:                     fitness = -P(top-1)
     """
+    x = image_array.astype(np.float32)
+    if x.ndim == 3:
+        x = np.expand_dims(x, axis=0)  # (1,H,W,3)
 
-    # TODO (student)
-    # Get model predictions
-    # Assuming model returns probabilities for each class
-    # print(image_array.shape)
-    # exit()
-    predictions = model.predict(image_array)
-    
-    # Get the predicted label (highest probability)
-    predicted_label = model.get_label(predictions)
-    
-    # Get probability of target label
-    target_prob = model.get_probability(predictions, target_label)
-    
-    # If model predicts target label, fitness is the probability (we want to maximize it)
-    # Otherwise, fitness is negative of the predicted label's probability
-    if predicted_label == target_label:
-        fitness = target_prob
+    # VGG16 expects preprocess_input on RGB [0..255]
+    x_in = preprocess_input(x.copy())
+    preds = model.predict(x_in, verbose=0)  # (1,1000)
+
+    top1 = decode_predictions(preds, top=1)[0][0]  # (synset, label, prob)
+    pred_label = top1[1]
+    pred_prob = float(top1[2])
+
+    if pred_label == target_label:
+        return pred_prob
     else:
-        predicted_prob = model.get_probability(predictions, predicted_label)
-        fitness = -predicted_prob
-    
-    return fitness
+        return -pred_prob
 
 
 # ============================================================
-# 2. MUTATION FUNCTION
+# 2. MUTATION FUNCTION (KERAS)
 # ============================================================
-
 def mutate_seed(
     seed: np.ndarray,
     epsilon: float
 ) -> List[np.ndarray]:
     """
-    Produce ANY NUMBER of mutated neighbors.
-
-    Students may implement ANY mutation strategy:
-        - modify 1 pixel
-        - modify multiple pixels
-        - patch-based mutation
-        - channel-based mutation
-        - gaussian noise (clipped)
-        - etc.
-
-    BUT EVERY neighbor must satisfy the L∞ constraint:
-
-        For all pixels i,j,c:
-            |neighbor[i,j,c] - seed[i,j,c]| <= 255 * epsilon
-
-    Requirements:
-        ✓ Return a list of neighbors: [neighbor1, neighbor2, ..., neighborK]
-        ✓ K can be ANY size ≥ 1
-        ✓ Neighbors must be deep copies of seed
-        ✓ Pixel values must remain in [0, 255]
-        ✓ Must obey the L∞ bound exactly
-
-    Args:
-        seed (np.ndarray): input image
-        epsilon (float): allowed perturbation budget
-
-    Returns:
-        List[np.ndarray]: mutated neighbors
+    Create neighbors s.t. ||neighbor - seed||_inf <= 255*epsilon.
     """
+    seed = seed.astype(np.float32)
+    max_pert = 255.0 * float(epsilon)
+    h, w, c = seed.shape
 
-    # TODO (student)
-    neighbors = []
-    max_perturbation = 255 * epsilon
-    for channel in range(seed.shape[2]):
-        neighbor = seed.copy()
-        # Perturb entire channel
-        perturbation = np.random.uniform(-max_perturbation, max_perturbation, 
-                                        (seed.shape[0], seed.shape[1]))
-        neighbor[:, :, channel] = seed[:, :, channel] + perturbation
-        neighbor[:, :, channel] = np.clip(neighbor[:, :, channel], 0, 255)
-        neighbors.append(neighbor)
-    
+    neighbors: List[np.ndarray] = []
+
+    K = 30                       # how many neighbors
+    M = max(1, (h * w) // 150)   # how many pixels per neighbor (~0.67%)
+
+    for _ in range(K):
+        nb = seed.copy()
+
+        ys = np.random.randint(0, h, size=M)
+        xs = np.random.randint(0, w, size=M)
+
+        delta = np.random.uniform(-max_pert, max_pert, size=(M, c)).astype(np.float32)
+        nb[ys, xs, :] = nb[ys, xs, :] + delta
+
+        # enforce L∞ relative to seed
+        nb = np.clip(nb, seed - max_pert, seed + max_pert)
+
+        # keep valid pixel range
+        nb = np.clip(nb, 0.0, 255.0)
+
+        neighbors.append(nb)
+
     return neighbors
 
 
-
 # ============================================================
-# 3. SELECT BEST CANDIDATE
+# 3. SELECT BEST (KERAS)
 # ============================================================
-
 def select_best(
     candidates: List[np.ndarray],
     model,
     target_label: str
 ) -> Tuple[np.ndarray, float]:
     """
-    Evaluate fitness for all candidates and return the one with
-    the LOWEST fitness score.
-
-    Args:
-        candidates (List[np.ndarray])
-        model: classifier
-        target_label (str)
-
-    Returns:
-        (best_image, best_fitness)
+    Return candidate with LOWEST fitness.
     """
+    best_img = candidates[0]
+    best_fit = compute_fitness(best_img, model, target_label)
 
-    # TODO (student)
-    best_image = None
-    best_fitness = float('inf')  # Start with worst possible fitness
-    
-    for candidate in candidates:
-        fitness = compute_fitness(candidate, model, target_label)
-        
-        # Lower fitness is better
-        if fitness < best_fitness:
-            best_fitness = fitness
-            best_image = candidate.copy()
-    
-    return best_image, best_fitness
+    for cand in candidates[1:]:
+        fit = compute_fitness(cand, model, target_label)
+        if fit < best_fit:
+            best_fit = fit
+            best_img = cand
+
+    return best_img.copy(), float(best_fit)
 
 
 # ============================================================
-# 4. HILL-CLIMBING ALGORITHM
+# 4. HILL CLIMB (KERAS)
 # ============================================================
-
 def hill_climb(
     initial_seed: np.ndarray,
     model,
@@ -166,87 +130,55 @@ def hill_climb(
     iterations: int = 300
 ) -> Tuple[np.ndarray, float]:
     """
-    Main hill-climbing loop.
-
-    Requirements:
-        ✓ Start from initial_seed
-        ✓ EACH iteration:
-              - Generate ANY number of neighbors using mutate_seed()
-              - Enforce the SAME L∞ bound relative to initial_seed
-              - Add current image to candidates (elitism)
-              - Use select_best() to pick the winner
-        ✓ Accept new candidate only if fitness improves
-        ✓ Stop if:
-              - target class is broken confidently, OR
-              - no improvement for multiple steps (optional)
-
-    Returns:
-        (final_image, final_fitness)
+    Hill-climbing with global L∞ bound relative to initial_seed.
+    Accept only if fitness decreases.
     """
+    init = initial_seed.astype(np.float32)
+    max_pert = 255.0 * float(epsilon)
 
-    # TODO (team work)
-    current_image = initial_seed.copy()
-    current_fitness = compute_fitness(current_image, model, target_label)
-    
-    max_perturbation = 255 * epsilon
-    no_improvement_count = 0
-    max_no_improvement = 50  # Stop if no improvement for 50 iterations
-    
-    print(f"Initial fitness: {current_fitness:.4f}")
-    
-    for iteration in range(iterations):
-        # Generate neighbors from current image
-        neighbors = mutate_seed(current_image, epsilon)
-        
-        # Enforce L∞ constraint relative to ORIGINAL seed
-        valid_neighbors = []
-        for neighbor in neighbors:
-            # Check if neighbor satisfies L∞ constraint relative to initial_seed
-            diff = np.abs(neighbor - initial_seed)
-            if np.max(diff) <= max_perturbation:
-                valid_neighbors.append(neighbor)
-            else:
-                # Clip to satisfy constraint
-                neighbor_clipped = np.clip(
-                    neighbor,
-                    initial_seed - max_perturbation,
-                    initial_seed + max_perturbation
-                )
-                neighbor_clipped = np.clip(neighbor_clipped, 0, 255)
-                valid_neighbors.append(neighbor_clipped)
-        
-        # Add current image to candidates (elitism)
-        candidates = [current_image] + valid_neighbors
-        
-        # Select best candidate
-        best_image, best_fitness = select_best(candidates, model, target_label)
-        
-        # Check if fitness improved
-        if best_fitness < current_fitness:
-            current_image = best_image.copy()
-            current_fitness = best_fitness
-            no_improvement_count = 0
-            
-            if iteration % 10 == 0:
-                print(f"Iteration {iteration}: fitness = {current_fitness:.4f}")
-            
-            # Check if target is confidently reached (fitness > 0 means target is predicted)
-            if current_fitness > 0.9:  # High confidence in target class
-                print(f"Target reached with confidence {current_fitness:.4f} at iteration {iteration}")
-                break
+    current = init.copy()
+    current_fit = compute_fitness(current, model, target_label)
+
+    no_improve = 0
+    patience = 60
+
+    print(f"Initial fitness: {current_fit:.5f}")
+
+    for it in range(iterations):
+        neighbors = mutate_seed(current, epsilon)
+
+        # Enforce SAME L∞ bound relative to ORIGINAL seed (required)
+        clipped = []
+        for nb in neighbors:
+            nb = np.clip(nb, init - max_pert, init + max_pert)
+            nb = np.clip(nb, 0.0, 255.0)
+            clipped.append(nb.astype(np.float32))
+
+        # elitism
+        candidates = [current] + clipped
+
+        best_img, best_fit = select_best(candidates, model, target_label)
+
+        if best_fit < current_fit:
+            current, current_fit = best_img, best_fit
+            no_improve = 0
         else:
-            no_improvement_count += 1
-        
-        # Stop if no improvement for too long
-        if no_improvement_count >= max_no_improvement:
-            print(f"No improvement for {max_no_improvement} iterations. Stopping.")
+            no_improve += 1
+
+        if it % 10 == 0:
+            print(f"Iter {it:3d} | fitness={current_fit:.5f}")
+
+        # Attack success condition for this fitness:
+        # negative fitness => top-1 != target label (broken)
+        if current_fit < -0.90:
+            print(f"Confidently broken at iter {it}: fitness={current_fit:.5f}")
             break
-    
-    print(f"Final fitness: {current_fitness:.4f}")
-    return current_image, current_fitness
-    
 
+        if no_improve >= patience:
+            print(f"No improvement for {patience} iters. Stopping.")
+            break
 
+    return current, float(current_fit)
 # ============================================================
 # 5. PROGRAM ENTRY POINT FOR RUNNING A SINGLE ATTACK
 # ============================================================
@@ -267,7 +199,7 @@ if __name__ == "__main__":
     print(f"Loaded image: {image_path}")
     print(f"Target label: {target_label}")
 
-    img = load_img(image_path)
+    img = load_img(image_path, target_size=(224, 224))
     plt.imshow(img)
     plt.title("Original image")
     plt.show()
@@ -277,7 +209,7 @@ if __name__ == "__main__":
 
     # Print baseline top-5 predictions
     print("\nBaseline predictions (top-5):")
-    preds = model.predict(np.expand_dims(seed, axis=0))
+    preds = model.predict(preprocess_input(np.expand_dims(seed.astype(np.float32), axis=0)))
     for cl in decode_predictions(preds, top=5)[0]:
         print(f"{cl[1]:20s}  prob={cl[2]:.5f}")
 
