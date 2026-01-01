@@ -39,26 +39,18 @@ def compute_fitness(
     """
 
     # TODO (student)
-    # Get model predictions
-    # Assuming model returns probabilities for each class
-    # print(image_array.shape)
-    # exit()
+    
     predictions = model.predict(image_array)
-    
-    # Get the predicted label (highest probability)
     predicted_label = model.get_label(predictions)
-    
-    # Get probability of target label
     target_prob = model.get_probability(predictions, target_label)
     
-    # If model predicts target label, fitness is the probability (we want to maximize it)
-    # Otherwise, fitness is negative of the predicted label's probability
     if predicted_label == target_label:
-        fitness = target_prob
+        # Success! As target_prob goes up to 1.0, fitness goes down to 0.0
+        fitness = 1.0 - target_prob
     else:
-        predicted_prob = model.get_probability(predictions, predicted_label)
-        fitness = -predicted_prob
-    
+        # Not there yet. Penalize based on how far target_prob is from 1.0
+        fitness = 1.0 + (1.0 - target_prob)
+        
     return fitness
 
 
@@ -103,15 +95,46 @@ def mutate_seed(
 
     # TODO (student)
     neighbors = []
-    max_perturbation = 255 * epsilon
-    for channel in range(seed.shape[2]):
-        neighbor = seed.copy()
-        # Perturb entire channel
-        perturbation = np.random.uniform(-max_perturbation, max_perturbation, 
-                                        (seed.shape[0], seed.shape[1]))
-        neighbor[:, :, channel] = seed[:, :, channel] + perturbation
-        neighbor[:, :, channel] = np.clip(neighbor[:, :, channel], 0, 255)
-        neighbors.append(neighbor)
+    # The absolute max/min bounds allowed by the epsilon budget
+    max_delta = 255 * epsilon
+    
+    # Calculate bounds relative to the ORIGINAL image to prevent drift
+    lower_bound = np.clip(original_image - max_delta, 0, 255)
+    upper_bound = np.clip(original_image + max_delta, 0, 255)
+
+    for _ in range(K):
+        # 1. Start with a deep copy
+        neighbor = seed.copy().astype(np.float32)
+        
+        # 2. Strategy: Mix different types of noise
+        # Some neighbors get small global noise, some get large local noise
+        mutation_type = np.random.choice(['global', 'sparse', 'patch'])
+        
+        if mutation_type == 'global':
+            # Add uniform noise to the whole image
+            noise = np.random.uniform(-max_delta, max_delta, seed.shape)
+            neighbor += noise
+            
+        elif mutation_type == 'sparse':
+            # Change only 10% of pixels, but change them significantly
+            mask = np.random.random(seed.shape) < 0.10
+            noise = np.random.uniform(-max_delta, max_delta, seed.shape)
+            neighbor[mask] += noise[mask]
+            
+        elif mutation_type == 'patch':
+            # Change a random 8x8 square patch
+            h, w = seed.shape[:2]
+            ph, pw = 8, 8
+            y = np.random.randint(0, h - ph)
+            x = np.random.randint(0, w - pw)
+            neighbor[y:y+ph, x:x+pw] += np.random.uniform(-max_delta, max_delta, (ph, pw, seed.shape[2]))
+
+        # 3. CRITICAL: The L-infinity Constraint
+        # This ensures we never move further than epsilon from the ORIGINAL image
+        neighbor = np.clip(neighbor, lower_bound, upper_bound)
+        
+        # 4. Final cast back to original data type with proper rounding
+        neighbors.append(np.round(neighbor).astype(seed.dtype))
     
     return neighbors
 
@@ -188,35 +211,17 @@ def hill_climb(
     current_image = initial_seed.copy()
     current_fitness = compute_fitness(current_image, model, target_label)
     
-    max_perturbation = 255 * epsilon
     no_improvement_count = 0
     max_no_improvement = 50  # Stop if no improvement for 50 iterations
     
     print(f"Initial fitness: {current_fitness:.4f}")
     
     for iteration in range(iterations):
-        # Generate neighbors from current image
-        neighbors = mutate_seed(current_image, epsilon)
-        
-        # Enforce L∞ constraint relative to ORIGINAL seed
-        valid_neighbors = []
-        for neighbor in neighbors:
-            # Check if neighbor satisfies L∞ constraint relative to initial_seed
-            diff = np.abs(neighbor - initial_seed)
-            if np.max(diff) <= max_perturbation:
-                valid_neighbors.append(neighbor)
-            else:
-                # Clip to satisfy constraint
-                neighbor_clipped = np.clip(
-                    neighbor,
-                    initial_seed - max_perturbation,
-                    initial_seed + max_perturbation
-                )
-                neighbor_clipped = np.clip(neighbor_clipped, 0, 255)
-                valid_neighbors.append(neighbor_clipped)
+        # Generate neighbors from current image, constrained by initial_seed
+        neighbors = mutate_seed(current_image, epsilon, initial_seed, K)
         
         # Add current image to candidates (elitism)
-        candidates = [current_image] + valid_neighbors
+        candidates = [current_image] + neighbors
         
         # Select best candidate
         best_image, best_fitness = select_best(candidates, model, target_label)
@@ -230,9 +235,9 @@ def hill_climb(
             if iteration % 10 == 0:
                 print(f"Iteration {iteration}: fitness = {current_fitness:.4f}")
             
-            # Check if target is confidently reached (fitness > 0 means target is predicted)
-            if current_fitness > 0.9:  # High confidence in target class
-                print(f"Target reached with confidence {current_fitness:.4f} at iteration {iteration}")
+            # Check if target is confidently reached
+            if current_fitness < 0.1:  # Very close to 0 = High confidence success
+                print(f"Target reached with high confidence at iteration {iteration}!")
                 break
         else:
             no_improvement_count += 1
