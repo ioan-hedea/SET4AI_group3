@@ -15,19 +15,26 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Tuple
 from keras.applications import vgg16
+from keras.applications.vgg16 import preprocess_input
 from keras.applications.imagenet_utils import decode_predictions
 from keras.utils import array_to_img, load_img, img_to_array
-from keras.applications.vgg16 import preprocess_input
-import numpy as np
-import torch
-from typing import List, Tuple
-# ImageNet normalization for torchvision models
-_IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
-_IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
+# Map human-readable ImageNet label -> class index (0..999)
+import json
+import urllib.request
+
+IMAGENET_CLASS_INDEX_URL = (
+    "https://storage.googleapis.com/download.tensorflow.org/data/imagenet_class_index.json"
+)
+
+with urllib.request.urlopen(IMAGENET_CLASS_INDEX_URL) as f:
+    CLASS_INDEX = json.load(f)
+
+# Map human-readable label -> class index (0..999)
+LABEL_TO_INDEX = {v[1]: int(k) for k, v in CLASS_INDEX.items()}
 
 # ============================================================
-# 1. FITNESS FUNCTION (KERAS)
+# 1. FITNESS FUNCTION
 # ============================================================
 def compute_fitness(
     image_array: np.ndarray,
@@ -35,69 +42,80 @@ def compute_fitness(
     target_label: str
 ) -> float:
     """
-    Fitness (LOWER is better):
-      - If top-1 == target_label: fitness = P(target_label)
-      - Else:                     fitness = -P(top-1)
+    Fitness definition (LOWER is better):
+        - If the model predicts target_label:
+              fitness = probability(target_label)
+        - Otherwise:
+              fitness = -probability(predicted_label)
     """
     x = image_array.astype(np.float32)
     if x.ndim == 3:
         x = np.expand_dims(x, axis=0)  # (1,H,W,3)
 
-    # VGG16 expects preprocess_input on RGB [0..255]
+    # VGG16 expects preprocess_input on RGB values in [0..255]
     x_in = preprocess_input(x.copy())
-    preds = model.predict(x_in, verbose=0)  # (1,1000)
+    probs = model.predict(x_in, verbose=0)[0]  # (1000,)
 
-    top1 = decode_predictions(preds, top=1)[0][0]  # (synset, label, prob)
-    pred_label = top1[1]
-    pred_prob = float(top1[2])
+    pred_idx = int(np.argmax(probs))
+    pred_prob = float(probs[pred_idx])
 
-    if pred_label == target_label:
-        return pred_prob
+    t_idx = LABEL_TO_INDEX.get(target_label, None)
+    if t_idx is not None and pred_idx == t_idx:
+        return float(probs[t_idx])
     else:
         return -pred_prob
 
 
 # ============================================================
-# 2. MUTATION FUNCTION (KERAS)
+# 2. MUTATION FUNCTION
 # ============================================================
 def mutate_seed(
     seed: np.ndarray,
     epsilon: float
 ) -> List[np.ndarray]:
     """
-    Create neighbors s.t. ||neighbor - seed||_inf <= 255*epsilon.
+    Produce mutated neighbors that satisfy:
+        |neighbor[i,j,c] - seed[i,j,c]| <= 255 * epsilon
     """
     seed = seed.astype(np.float32)
-    max_pert = 255.0 * float(epsilon)
+    max_delta = 255.0 * float(epsilon)
     h, w, c = seed.shape
 
     neighbors: List[np.ndarray] = []
 
-    K = 30                       # how many neighbors
-    M = max(1, (h * w) // 150)   # how many pixels per neighbor (~0.67%)
+    # Tunable knobs
+    K = 25          # neighbors per iteration
+    patch = 32      # patch size (try 48 if too weak)
+    sigma = max_delta * 0.5  # noise scale inside patch
 
     for _ in range(K):
         nb = seed.copy()
 
-        ys = np.random.randint(0, h, size=M)
-        xs = np.random.randint(0, w, size=M)
+        # random patch location
+        y0 = np.random.randint(0, max(1, h - patch))
+        x0 = np.random.randint(0, max(1, w - patch))
+        y1 = min(h, y0 + patch)
+        x1 = min(w, x0 + patch)
 
-        delta = np.random.uniform(-max_pert, max_pert, size=(M, c)).astype(np.float32)
-        nb[ys, xs, :] = nb[ys, xs, :] + delta
+        # gaussian patch noise, clipped to L∞ budget
+        noise = np.random.normal(0.0, sigma, size=(y1 - y0, x1 - x0, c)).astype(np.float32)
+        noise = np.clip(noise, -max_delta, max_delta)
 
-        # enforce L∞ relative to seed
-        nb = np.clip(nb, seed - max_pert, seed + max_pert)
+        nb[y0:y1, x0:x1, :] += noise
 
-        # keep valid pixel range
+        # Enforce L∞ relative to seed (exactly)
+        nb = np.clip(nb, seed - max_delta, seed + max_delta)
+
+        # Clamp to valid pixel range
         nb = np.clip(nb, 0.0, 255.0)
 
-        neighbors.append(nb)
+        neighbors.append(nb.astype(np.float32))
 
     return neighbors
 
 
 # ============================================================
-# 3. SELECT BEST (KERAS)
+# 3. SELECT BEST CANDIDATE
 # ============================================================
 def select_best(
     candidates: List[np.ndarray],
@@ -105,7 +123,8 @@ def select_best(
     target_label: str
 ) -> Tuple[np.ndarray, float]:
     """
-    Return candidate with LOWEST fitness.
+    Evaluate fitness for all candidates and return the one with
+    the LOWEST fitness score.
     """
     best_img = candidates[0]
     best_fit = compute_fitness(best_img, model, target_label)
@@ -120,7 +139,7 @@ def select_best(
 
 
 # ============================================================
-# 4. HILL CLIMB (KERAS)
+# 4. HILL-CLIMBING ALGORITHM
 # ============================================================
 def hill_climb(
     initial_seed: np.ndarray,
@@ -130,31 +149,39 @@ def hill_climb(
     iterations: int = 300
 ) -> Tuple[np.ndarray, float]:
     """
-    Hill-climbing with global L∞ bound relative to initial_seed.
-    Accept only if fitness decreases.
+    Hill-climbing loop.
+
+    Requirements:
+        ✓ Start from initial_seed
+        ✓ EACH iteration:
+              - Generate neighbors using mutate_seed()
+              - Enforce SAME L∞ bound relative to initial_seed
+              - Add current image to candidates (elitism)
+              - Use select_best() to pick the winner
+        ✓ Accept new candidate only if fitness improves (decreases)
     """
     init = initial_seed.astype(np.float32)
-    max_pert = 255.0 * float(epsilon)
+    max_delta = 255.0 * float(epsilon)
 
     current = init.copy()
     current_fit = compute_fitness(current, model, target_label)
 
     no_improve = 0
-    patience = 60
+    patience = 120
 
     print(f"Initial fitness: {current_fit:.5f}")
 
     for it in range(iterations):
         neighbors = mutate_seed(current, epsilon)
 
-        # Enforce SAME L∞ bound relative to ORIGINAL seed (required)
+        # Enforce SAME L∞ bound relative to ORIGINAL seed
         clipped = []
         for nb in neighbors:
-            nb = np.clip(nb, init - max_pert, init + max_pert)
+            nb = np.clip(nb, init - max_delta, init + max_delta)
             nb = np.clip(nb, 0.0, 255.0)
             clipped.append(nb.astype(np.float32))
 
-        # elitism
+        # Elitism
         candidates = [current] + clipped
 
         best_img, best_fit = select_best(candidates, model, target_label)
@@ -165,11 +192,11 @@ def hill_climb(
         else:
             no_improve += 1
 
-        if it % 10 == 0:
+        if it % 5 == 0:
             print(f"Iter {it:3d} | fitness={current_fit:.5f}")
 
-        # Attack success condition for this fitness:
-        # negative fitness => top-1 != target label (broken)
+        # Negative fitness means top-1 != target_label (broken).
+        # "Confidently broken" if wrong top-1 prob > 0.9 => fitness < -0.9
         if current_fit < -0.90:
             print(f"Confidently broken at iter {it}: fitness={current_fit:.5f}")
             break
@@ -179,19 +206,17 @@ def hill_climb(
             break
 
     return current, float(current_fit)
+
+
 # ============================================================
 # 5. PROGRAM ENTRY POINT FOR RUNNING A SINGLE ATTACK
 # ============================================================
-
 if __name__ == "__main__":
-    # Load classifier
     model = vgg16.VGG16(weights="imagenet")
 
-    # Load JSON describing dataset
     with open("data/image_labels.json") as f:
         image_list = json.load(f)
 
-    # Pick first entry
     item = image_list[0]
     image_path = "images/" + item["image"]
     target_label = item["label"]
@@ -204,16 +229,14 @@ if __name__ == "__main__":
     plt.title("Original image")
     plt.show()
 
-    img_array = img_to_array(img)
-    seed = img_array.copy()
+    seed = img_to_array(img).astype(np.float32)
 
-    # Print baseline top-5 predictions
+    # Baseline predictions (top-5) with correct preprocessing
     print("\nBaseline predictions (top-5):")
-    preds = model.predict(preprocess_input(np.expand_dims(seed.astype(np.float32), axis=0)))
+    preds = model.predict(preprocess_input(np.expand_dims(seed, axis=0)), verbose=0)
     for cl in decode_predictions(preds, top=5)[0]:
         print(f"{cl[1]:20s}  prob={cl[2]:.5f}")
 
-    # Run hill climbing attack
     final_img, final_fitness = hill_climb(
         initial_seed=seed,
         model=model,
@@ -228,8 +251,7 @@ if __name__ == "__main__":
     plt.title(f"Adversarial Result — fitness={final_fitness:.4f}")
     plt.show()
 
-    # Print final predictions
-    final_preds = model.predict(np.expand_dims(final_img, axis=0))
+    final_preds = model.predict(preprocess_input(np.expand_dims(final_img, axis=0)), verbose=0)
     print("\nFinal predictions:")
     for cl in decode_predictions(final_preds, top=5)[0]:
         print(cl)
