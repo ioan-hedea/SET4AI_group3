@@ -22,6 +22,19 @@ from keras.applications.vgg16 import preprocess_input
 from keras.applications.imagenet_utils import decode_predictions
 from keras.utils import array_to_img, load_img, img_to_array
 
+# Map human-readable ImageNet label -> class index (0..999)
+import json
+import urllib.request
+
+IMAGENET_CLASS_INDEX_URL = (
+    "https://storage.googleapis.com/download.tensorflow.org/data/imagenet_class_index.json"
+)
+
+with urllib.request.urlopen(IMAGENET_CLASS_INDEX_URL) as f:
+    CLASS_INDEX = json.load(f)
+
+# Map human-readable label -> class index (0..999)
+LABEL_TO_INDEX = {v[1]: int(k) for k, v in CLASS_INDEX.items()}
 
 # ============================================================
 # Globals for measurement (no signature changes)
