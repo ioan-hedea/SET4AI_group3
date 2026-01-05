@@ -11,6 +11,9 @@ DO NOT change function signatures.
 """
 
 import json
+import os
+import csv
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Tuple
@@ -19,19 +22,49 @@ from keras.applications.vgg16 import preprocess_input
 from keras.applications.imagenet_utils import decode_predictions
 from keras.utils import array_to_img, load_img, img_to_array
 
-# Map human-readable ImageNet label -> class index (0..999)
-import json
-import urllib.request
 
-IMAGENET_CLASS_INDEX_URL = (
-    "https://storage.googleapis.com/download.tensorflow.org/data/imagenet_class_index.json"
-)
+# ============================================================
+# Globals for measurement (no signature changes)
+# ============================================================
+HC_QUERY_COUNT = 0      # number of model.predict calls
+HC_LAST_ITERS = 0       # iterations used in last hill_climb run
 
-with urllib.request.urlopen(IMAGENET_CLASS_INDEX_URL) as f:
-    CLASS_INDEX = json.load(f)
 
-# Map human-readable label -> class index (0..999)
-LABEL_TO_INDEX = {v[1]: int(k) for k, v in CLASS_INDEX.items()}
+# ============================================================
+# Metrics helpers (image arrays are HWC float in [0..255])
+# ============================================================
+def hc_perturbation_metrics(clean: np.ndarray, adv: np.ndarray, thresh: float = 1.0):
+    """
+    clean, adv: HWC float arrays in [0..255]
+    thresh: pixel-change threshold in same units (1.0 ~= 1/255 in normalized space)
+
+    Returns:
+      pixels_changed: count of (H,W) locations where any channel changed > thresh
+      linf_01: max abs perturbation / 255 in [0,1]
+    """
+    diff = np.abs(adv.astype(np.float32) - clean.astype(np.float32))  # HWC
+    linf_raw = float(diff.max())
+    linf_01 = linf_raw / 255.0
+
+    per_pixel = diff.max(axis=2)  # HW
+    pixels_changed = int((per_pixel > thresh).sum())
+    return pixels_changed, linf_01
+
+
+def top1_label_prob_keras(model, image_hwc_255: np.ndarray):
+    """
+    Returns (label_str, prob_float) for top-1 prediction.
+    image_hwc_255: HWC float in [0..255]
+    """
+    x = image_hwc_255.astype(np.float32)
+    if x.ndim == 3:
+        x = np.expand_dims(x, axis=0)  # 1,H,W,3
+
+    x_in = preprocess_input(x.copy())
+    probs = model.predict(x_in, verbose=0)
+    top1 = decode_predictions(probs, top=1)[0][0]  # (synset, label, prob)
+    return top1[1], float(top1[2])
+
 
 # ============================================================
 # 1. FITNESS FUNCTION
@@ -47,22 +80,31 @@ def compute_fitness(
               fitness = probability(target_label)
         - Otherwise:
               fitness = -probability(predicted_label)
+
+    Note: This is black-box: uses only model outputs.
     """
+    global HC_QUERY_COUNT
+    HC_QUERY_COUNT += 1
+
     x = image_array.astype(np.float32)
     if x.ndim == 3:
         x = np.expand_dims(x, axis=0)  # (1,H,W,3)
 
-    # VGG16 expects preprocess_input on RGB values in [0..255]
     x_in = preprocess_input(x.copy())
     probs = model.predict(x_in, verbose=0)[0]  # (1000,)
 
     pred_idx = int(np.argmax(probs))
     pred_prob = float(probs[pred_idx])
 
-    t_idx = LABEL_TO_INDEX.get(target_label, None)
-    if t_idx is not None and pred_idx == t_idx:
-        return float(probs[t_idx])
+    # We avoid any internet dependency: compare using decoded top-1 label string
+    # (same approach you used successfully earlier)
+    pred_label = decode_predictions(np.expand_dims(probs, axis=0), top=1)[0][0][1]
+
+    if pred_label == target_label:
+        # If still correct, higher prob should be "worse", so positive value.
+        return pred_prob
     else:
+        # If misclassified, negative with magnitude = confidence in wrong class.
         return -pred_prob
 
 
@@ -84,20 +126,18 @@ def mutate_seed(
     neighbors: List[np.ndarray] = []
 
     # Tunable knobs
-    K = 25          # neighbors per iteration
-    patch = 32      # patch size (try 48 if too weak)
-    sigma = max_delta * 0.5  # noise scale inside patch
+    K = 25
+    patch = 32
+    sigma = max_delta * 0.5
 
     for _ in range(K):
         nb = seed.copy()
 
-        # random patch location
         y0 = np.random.randint(0, max(1, h - patch))
         x0 = np.random.randint(0, max(1, w - patch))
         y1 = min(h, y0 + patch)
         x1 = min(w, x0 + patch)
 
-        # gaussian patch noise, clipped to L∞ budget
         noise = np.random.normal(0.0, sigma, size=(y1 - y0, x1 - x0, c)).astype(np.float32)
         noise = np.clip(noise, -max_delta, max_delta)
 
@@ -105,8 +145,6 @@ def mutate_seed(
 
         # Enforce L∞ relative to seed (exactly)
         nb = np.clip(nb, seed - max_delta, seed + max_delta)
-
-        # Clamp to valid pixel range
         nb = np.clip(nb, 0.0, 255.0)
 
         neighbors.append(nb.astype(np.float32))
@@ -149,17 +187,10 @@ def hill_climb(
     iterations: int = 300
 ) -> Tuple[np.ndarray, float]:
     """
-    Hill-climbing loop.
-
-    Requirements:
-        ✓ Start from initial_seed
-        ✓ EACH iteration:
-              - Generate neighbors using mutate_seed()
-              - Enforce SAME L∞ bound relative to initial_seed
-              - Add current image to candidates (elitism)
-              - Use select_best() to pick the winner
-        ✓ Accept new candidate only if fitness improves (decreases)
+    Hill-climbing loop (black-box).
     """
+    global HC_LAST_ITERS
+
     init = initial_seed.astype(np.float32)
     max_delta = 255.0 * float(epsilon)
 
@@ -169,21 +200,17 @@ def hill_climb(
     no_improve = 0
     patience = 120
 
-    print(f"Initial fitness: {current_fit:.5f}")
-
     for it in range(iterations):
         neighbors = mutate_seed(current, epsilon)
 
-        # Enforce SAME L∞ bound relative to ORIGINAL seed
+        # Enforce SAME L∞ bound relative to ORIGINAL seed (required)
         clipped = []
         for nb in neighbors:
             nb = np.clip(nb, init - max_delta, init + max_delta)
             nb = np.clip(nb, 0.0, 255.0)
             clipped.append(nb.astype(np.float32))
 
-        # Elitism
         candidates = [current] + clipped
-
         best_img, best_fit = select_best(candidates, model, target_label)
 
         if best_fit < current_fit:
@@ -192,66 +219,112 @@ def hill_climb(
         else:
             no_improve += 1
 
-        if it % 5 == 0:
-            print(f"Iter {it:3d} | fitness={current_fit:.5f}")
-
-        # Negative fitness means top-1 != target_label (broken).
-        # "Confidently broken" if wrong top-1 prob > 0.9 => fitness < -0.9
+        # stop if confidently broken: wrong top-1 prob > 0.9 => fitness < -0.9
         if current_fit < -0.90:
-            print(f"Confidently broken at iter {it}: fitness={current_fit:.5f}")
-            break
+            HC_LAST_ITERS = it + 1
+            return current, float(current_fit)
 
         if no_improve >= patience:
-            print(f"No improvement for {patience} iters. Stopping.")
-            break
+            HC_LAST_ITERS = it + 1
+            return current, float(current_fit)
 
+    HC_LAST_ITERS = iterations
     return current, float(current_fit)
 
 
 # ============================================================
-# 5. PROGRAM ENTRY POINT FOR RUNNING A SINGLE ATTACK
+# 5. PROGRAM ENTRY POINT: run HC over entire dataset + write CSV
 # ============================================================
 if __name__ == "__main__":
+    EPS = 0.30
+    ITERATIONS = 300
+
+    JSON_FILE = "data/image_labels.json"
+    IMAGE_DIR = "images"
+    OUTDIR = "hc_results"
+    os.makedirs(OUTDIR, exist_ok=True)
+    METRICS_CSV = os.path.join(OUTDIR, "metrics_hc.csv")
+
     model = vgg16.VGG16(weights="imagenet")
 
-    with open("data/image_labels.json") as f:
-        image_list = json.load(f)
+    with open(JSON_FILE) as f:
+        items = json.load(f)
 
-    item = image_list[0]
-    image_path = "images/" + item["image"]
-    target_label = item["label"]
+    rows = []
+    for entry in items:
+        image_file = entry["image"]
+        target_label = entry["label"]
+        img_path = os.path.join(IMAGE_DIR, image_file)
 
-    print(f"Loaded image: {image_path}")
-    print(f"Target label: {target_label}")
+        # Load seed in correct size
+        img = load_img(img_path, target_size=(224, 224))
+        seed = img_to_array(img).astype(np.float32)  # HWC [0..255]
 
-    img = load_img(image_path, target_size=(224, 224))
-    plt.imshow(img)
-    plt.title("Original image")
-    plt.show()
+        # Clean prediction
+        clean_label, clean_prob = top1_label_prob_keras(model, seed)
 
-    seed = img_to_array(img).astype(np.float32)
+        # Save clean image
+        array_to_img(seed).save(os.path.join(OUTDIR, f"{image_file}_clean.png"))
 
-    # Baseline predictions (top-5) with correct preprocessing
-    print("\nBaseline predictions (top-5):")
-    preds = model.predict(preprocess_input(np.expand_dims(seed, axis=0)), verbose=0)
-    for cl in decode_predictions(preds, top=5)[0]:
-        print(f"{cl[1]:20s}  prob={cl[2]:.5f}")
+        # HC attack
+        HC_QUERY_COUNT = 0
+        t0 = time.perf_counter()
+        adv, final_fit = hill_climb(seed, model, target_label, epsilon=EPS, iterations=ITERATIONS)
+        dt = time.perf_counter() - t0
 
-    final_img, final_fitness = hill_climb(
-        initial_seed=seed,
-        model=model,
-        target_label=target_label,
-        epsilon=0.30,
-        iterations=300
-    )
+        adv_label, adv_prob = top1_label_prob_keras(model, adv)
+        array_to_img(adv).save(os.path.join(OUTDIR, f"{image_file}_hc.png"))
 
-    print("\nFinal fitness:", final_fitness)
+        # success = top-1 differs from ground-truth label (assignment definition)
+        hc_success = int(adv_label != target_label)
 
-    plt.imshow(array_to_img(final_img))
-    plt.title(f"Adversarial Result — fitness={final_fitness:.4f}")
-    plt.show()
+        # perturbation metrics
+        pixels_changed, linf_01 = hc_perturbation_metrics(seed, adv, thresh=1.0)
 
-    final_preds = model.predict(preprocess_input(np.expand_dims(final_img, axis=0)), verbose=0)
-    print("\nFinal predictions:")
-    for cl in decode_predictions(final_preds, top=5)[0]:
-        print(cl)
+        rows.append({
+            "image": image_file,
+            "label": target_label,
+
+            "clean_top1": clean_label,
+            "clean_prob": clean_prob,
+            "clean_correct": int(clean_label == target_label),
+
+            "hc_top1": adv_label,
+            "hc_prob": adv_prob,
+            "hc_success": hc_success,
+            "hc_pixels_changed": pixels_changed,
+            "hc_linf": linf_01,
+            "hc_time_s": dt,
+            "hc_iterations_used": HC_LAST_ITERS,
+            "hc_model_queries": HC_QUERY_COUNT,
+            "final_fitness": final_fit,
+        })
+
+        print(f"\n[{image_file}] label={target_label} | clean={clean_label} ({clean_prob:.3f})"
+              f" | hc={adv_label} ({adv_prob:.3f}) | success={hc_success}"
+              f" | linf={linf_01:.3f} | pixels={pixels_changed} | time={dt:.2f}s"
+              f" | iters={HC_LAST_ITERS} | queries={HC_QUERY_COUNT}")
+
+    # Write CSV
+    with open(METRICS_CSV, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    # Print aggregates
+    def avg(xs): return float(sum(xs) / max(1, len(xs)))
+    success_rate = avg([r["hc_success"] for r in rows])
+    px_avg = avg([r["hc_pixels_changed"] for r in rows])
+    linf_max = max(r["hc_linf"] for r in rows)
+    t_avg = avg([r["hc_time_s"] for r in rows])
+    it_avg = avg([r["hc_iterations_used"] for r in rows])
+    q_avg = avg([r["hc_model_queries"] for r in rows])
+
+    print("\n=== HC Aggregate metrics (over dataset) ===")
+    print(f"HC success rate: {success_rate:.2f}")
+    print(f"HC avg pixels changed: {px_avg:.1f}")
+    print(f"HC max Linf: {linf_max:.4f} (expected <= {EPS:.2f})")
+    print(f"HC avg time/image: {t_avg:.4f}s")
+    print(f"HC avg iterations used: {it_avg:.1f}")
+    print(f"HC avg model queries: {q_avg:.1f}")
+    print(f"\nSaved HC metrics to: {METRICS_CSV}")
