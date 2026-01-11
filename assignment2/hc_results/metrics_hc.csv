@@ -1,0 +1,11 @@
+image,label,true_idx,clean_top1,clean_top1_idx,clean_prob,clean_correct,hc_top1,hc_top1_idx,hc_prob,hc_success,hc_pixels_changed,hc_linf,hc_time_s,hc_iterations_used,hc_model_queries,final_fitness
+fish.jpg,goldfish,1,goldfish,1,1.0,1,goldfish,1,1.0,0,0,0.0,233.85765191700193,120,4561,1.0
+castle.jpg,castle,483,castle,483,1.0,1,stupa,832,0.6113871335983276,1,6019,0.3,157.76132833299926,81,3079,0.3880169093608856
+cup.jpeg,cup,968,cup,968,1.0,1,coffee_mug,504,0.5964686274528503,1,13237,0.3,45.14202133400249,22,837,0.40345537662506104
+goldfinch.jpeg,hummingbird,94,goldfinch,11,1.0,0,goldfinch,11,1.0,1,0,0.0,1.9261521250009537,1,39,0.0
+seashore.jpeg,seashore,978,lakeside,975,0.9719650745391846,0,lakeside,975,0.9997552037239075,1,1024,0.3,2.3888072919799015,1,39,0.00024474141537211835
+bubble.jpeg,bubble,971,bubble,971,1.0,1,bubble,971,1.0,0,0,0.0,235.8613506249967,120,4561,1.0
+goblet.jpeg,goblet,572,eggnog,969,1.0,0,eggnog,969,1.0,1,1024,0.3,1.824037332989974,1,39,5.620811169510878e-20
+hay.jpeg,hay,958,hay,958,1.0,1,hay,958,1.0,0,0,0.0,231.60732854201342,120,4561,1.0
+water_bottle.jpeg,water jug,899,water_jug,899,0.9999918937683105,1,paper_towel,700,0.7161251306533813,1,2048,0.3,4.203760292002698,2,77,0.2838742434978485
+viaduct.jpeg,viaduct,888,viaduct,888,1.0,1,viaduct,888,1.0,0,0,0.0,236.02565633298946,120,4561,1.0

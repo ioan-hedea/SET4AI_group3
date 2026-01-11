@@ -1,0 +1,42 @@
+1) Fitness function is likely leaving performance on the table
+
+The “probability of the true class” objective is okay, but it’s not the best signal.
+
+Better black-box objectives that typically help a lot:
+	•	Margin loss:
+f(x)=p(y_{\text{true}}|x) - \max_{k\ne y_{\text{true}}} p(k|x)
+Minimize this. It gives a directional signal: not only “reduce true prob”, but also “push up a competitor”.
+	•	Targeted variant (if you pick a target class): maximize p(y_{\text{target}}|x) while keeping within \epsilon. Targeted attacks can be easier to optimize in some cases.
+
+This one change alone often increases success rate and reduces “stuck at 0 change”.
+
+2) Your neighborhood is a bit “blind”
+
+Random patch noise works sometimes, but often fails because:
+	•	VGG16 is sensitive to structured features; random noise is inefficient.
+	•	224×224×3 is huge; random sampling is low probability of hitting a useful direction.
+
+Better black-box neighborhood ideas (still simple, still legal):
+	•	Coordinate / block coordinate search: try modifying one patch at a time and keep only improvements (like finite-difference hill climbing).
+	•	Hierarchical (coarse-to-fine): start with big patches, then refine smaller ones near the “useful” regions.
+	•	Low-frequency noise basis (DCT-like idea): sample smooth perturbations instead of pixel noise; these often transfer better.
+	•	Sign perturbations (+ε or −ε) on selected pixels instead of Gaussian: tends to push stronger.
+
+3) Acceptance strategy could be more robust
+
+Pure “accept only if improved” gets stuck easily.
+
+Often better:
+	•	allow occasional worse moves (stochastic HC / simulated annealing),
+	•	or keep a small “beam” of top candidates per iteration (beam search),
+	•	or restart from the best-so-far with new random seeds (multi-start).
+
+4) Efficiency: you’re query-heavy
+
+Your query counts are high because you evaluate many neighbors and decode frequently.
+
+Two simple efficiency wins:
+	•	don’t call decode_predictions inside fitness (only use raw probabilities; decode only for final reporting)
+	•	batch candidate evaluations if possible (stack candidates into one tensor and do one model.predict)
+
+(These don’t change success rate much, but they help runtime and look good in an “efficiency” discussion.)
