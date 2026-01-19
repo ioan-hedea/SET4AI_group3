@@ -1,11 +1,15 @@
 import numpy as np
 import torch
+import os
 from stable_baselines3 import DQN
 from stable_baselines3 import PPO
 import gymnasium as gym
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
-VECNORM_PATH = "agents/vec_normalize.pkl"
+# Get the directory where this script is located, then navigate to agents
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+AGENTS_DIR = os.path.join(SCRIPT_DIR, "..", "agents")
+VECNORM_PATH = os.path.join(AGENTS_DIR, "vec_normalize.pkl")
 
 def pick_device():
     if torch.backends.mps.is_available():
@@ -16,6 +20,10 @@ def pick_device():
 
 def load_pretrained_policy(model_path="model_final"):
     device = pick_device()
+
+    # Handle relative path from agents directory
+    if not os.path.isabs(model_path):
+        model_path = os.path.join(AGENTS_DIR, os.path.basename(model_path))
 
     # Dummy env just to load stats
     dummy_env = DummyVecEnv([lambda: gym.make("highway-fast-v0")])
