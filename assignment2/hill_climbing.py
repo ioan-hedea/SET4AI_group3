@@ -116,28 +116,36 @@ def compute_fitness(
 ) -> float:
     """
     Untargeted black-box fitness (LOWER is better):
-        fitness = p(true_class | image)
 
-    This aligns with the assignment definition: success when top-1 != true class.
-    Uses only model outputs (probabilities), no gradients.
+    - If model is still correct (top-1 == true):   fitness = +p(true)
+    - If model is wrong (top-1 != true):          fitness = -(1 - p(true))
+
+    This guarantees:
+      * Fitness is positive when not yet adversarial
+      * Fitness becomes negative once misclassified
+      * More confident misclassification => more negative => better
     """
     global HC_QUERY_COUNT
     HC_QUERY_COUNT += 1
 
     true_idx = get_true_index_or_none(target_label)
     if true_idx is None:
-        # If label isn't in imagenet_classes.txt, we cannot compute a correct fitness.
-        # Return a constant so HC won't "cheat" via mismatched labels.
-        return 1.0
+        return 1.0  # can't evaluate properly
 
     x = image_array.astype(np.float32)
     if x.ndim == 3:
-        x = np.expand_dims(x, axis=0)  # (1,H,W,3)
+        x = np.expand_dims(x, axis=0)
 
     x_in = preprocess_input(x.copy())
     probs = model.predict(x_in, verbose=0)[0]  # (1000,)
 
-    return float(probs[true_idx])
+    p_true = float(probs[true_idx])
+    top1_idx = int(np.argmax(probs))
+
+    if top1_idx == int(true_idx):
+        return p_true                 # still correct => positive
+    else:
+        return -(1.0 - p_true)        # misclassified => negative
 
 
 # ============================================================
@@ -272,15 +280,17 @@ def hill_climb(
             no_improve = 0
         else:
             no_improve += 1
-
+        if current_fit < 0.0:
+            HC_LAST_ITERS = it + 1
+            return current, float(current_fit)
         # Stop when adversarial found (top-1 != true class)
-        if true_idx is not None:
-            x_in = preprocess_input(np.expand_dims(current.astype(np.float32), axis=0).copy())
-            probs = model.predict(x_in, verbose=0)[0]
-            HC_QUERY_COUNT += 1
-            if int(np.argmax(probs)) != int(true_idx):
-                HC_LAST_ITERS = it + 1
-                return current, float(current_fit)
+        # if true_idx is not None:
+        #     x_in = preprocess_input(np.expand_dims(current.astype(np.float32), axis=0).copy())
+        #     probs = model.predict(x_in, verbose=0)[0]
+        #     HC_QUERY_COUNT += 1
+        #     if int(np.argmax(probs)) != int(true_idx):
+        #         HC_LAST_ITERS = it + 1
+        #         return current, float(current_fit)
 
         if no_improve >= patience:
             HC_LAST_ITERS = it + 1
