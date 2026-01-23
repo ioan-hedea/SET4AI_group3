@@ -25,10 +25,10 @@ No internal policy/model details beyond calling policy(obs, info).
 """
 
 import copy
-from typing import Dict, Any, List, Tuple, Optional
+import math
+from typing import Dict, Any, List
 
 import numpy as np
-
 from envs.highway_env_utils import run_episode, record_video_episode
 from search.base_search import ScenarioSearch
 
@@ -36,6 +36,13 @@ from search.base_search import ScenarioSearch
 # ============================================================
 # 1) OBJECTIVES FROM TIME SERIES
 # ============================================================
+
+def is_not_directly_adjacent(ego_pos, other_pos, ego_length):
+    # directly adjacent = other is on the neighboring lane
+    # and its center is within the ego vehicle's length
+    adjacent = abs(other_pos[1] - ego_pos[1]) == 1 and ego_pos[0] - ego_length < other_pos[0] < ego_pos[0] + ego_length
+    return not adjacent
+
 
 def compute_objectives_from_time_series(time_series: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -59,12 +66,31 @@ def compute_objectives_from_time_series(time_series: List[Dict[str, Any]]) -> Di
     NOTE: If you want, you can add more objectives (lane-specific distances, time-to-crash, etc.)
     but keep the keys above at least.
     """
+    # TODO: improve fitness function
+    # extra score for more close encounters
+    # want to make function smoother, so give more points for erratic-like behaviour
+    # lane switching
+    # average change in speed
+    # avg distance to closest vehicles (< 2 car lengths)
+    # number of cars it passes, get passed by
+
     crash_count = 0
     min_distance = float('inf')
+
+    prev_lane_id = None
+    lane_switches = 0
+
+    prev_speed = None
+    speed_changes = []
+
+    prev_cars_behind = 0
+    cars_passed_count = 0
 
     for frame in time_series:
         if frame.get("crashed", False):
             crash_count = 1
+            min_distance = 0.0
+            break
 
         ego = frame.get("ego")
         others = frame.get("others", [])
@@ -80,26 +106,51 @@ def compute_objectives_from_time_series(time_series: List[Dict[str, Any]]) -> Di
                 other_width = other.get("width", 1.8)
 
                 # Compute Euclidean distance between centers
-                center_distance = float(np.linalg.norm(ego_pos - other_pos))
-
-                # Approximate clearance distance (distance between closest edges)
-                # Using half-widths as approximation for safety margin
-                clearance = center_distance - (ego_length / 2 + other_length / 2)
+                # ignore others that are directly adjacent to ego vehicle
+                # while the ego vehicle is moving in a straight line
+                if ego['heading'] != 0 or is_not_directly_adjacent(ego_pos, other_pos, ego_length):
+                    center_distance = float(np.linalg.norm(ego_pos - other_pos))
+                else:
+                    center_distance = float('inf')
 
                 min_distance = min(min_distance, center_distance)
+
+            # lane switching
+            if prev_lane_id is not None and prev_lane_id != ego["lane_id"]:
+                lane_switches += 1
+            prev_lane_id = ego["lane_id"]
+
+            # speed changes
+            if prev_speed is not None:
+                delta_speed = abs(ego["speed"] - prev_speed)
+                speed_changes.append(delta_speed)
+            prev_speed = ego["speed"]
+
+            # TODO: overtaking
 
     if min_distance == float('inf'):
         min_distance = 1000.0  # Default large value if no others
 
+    # erratic speed
+    # higher total speed change => more erratic, braking, accelerations
+    total_speed_change = sum(speed_changes)
+
     return {
         "crash_count": crash_count,
         "min_distance": min_distance,
+        "lane_switches": lane_switches,
+        "speed_change": total_speed_change,
     }
 
 
-def compute_fitness(objectives: Dict[str, Any]) -> float:
+def compute_fitness(
+        objectives: Dict[str, Any],
+        w_distance: float = 50,
+        w_lane_switch: float = 0.1,
+        w_speed_change: float = 0.1
+) -> float:
     """
-    Convert objectives into ONE scalar fitness value to MINIMIZE.
+    Convert objectives into ONE scalar fitness value to MAXIMIZE.
 
     Requirement:
     - Any crashing scenario must be strictly better than any non-crashing scenario.
@@ -112,13 +163,14 @@ def compute_fitness(objectives: Dict[str, Any]) -> float:
     """
     crash_count = objectives.get("crash_count", 0)
     min_distance = objectives.get("min_distance", float('inf'))
+    lane_switches = objectives.get("lane_switches", 0)
+    speed_change = objectives.get("speed_change", 0)
 
     if crash_count > 0:
-        # Crashing scenario is best (we want to minimize fitness)
-        return -1.0
+        # Crashing scenario is best (we want to maximize fitness)
+        return math.inf
     else:
-        # Non-crashing: return min_distance (smaller is better, i.e., closer to crash)
-        return float(min_distance)
+        return w_distance / min_distance + w_lane_switch * lane_switches + w_speed_change * speed_change
 
 
 # ============================================================
@@ -257,7 +309,7 @@ def hill_climb(
     # Hill climbing main loop
     for iteration in range(iterations):
         # Early stopping if we found a crash
-        if best_fit < 0:  # Crash found (fitness = -1)
+        if best_fit is math.inf:  # Crash found
             print(f" Crash found at iteration {iteration}!")
             break
 
@@ -281,7 +333,7 @@ def hill_climb(
             evaluations += 1
 
             # Track best neighbor
-            if fit_neighbor < best_neighbor_fit:
+            if fit_neighbor > best_neighbor_fit:
                 best_neighbor_fit = fit_neighbor
                 best_neighbor_cfg = copy.deepcopy(neighbor_cfg)
                 best_neighbor_obj = dict(obj_neighbor)
@@ -289,14 +341,14 @@ def hill_climb(
                 best_neighbor_ts = ts_neighbor
 
         # Accept best neighbor if it improves current solution
-        if best_neighbor_fit < cur_fit:
+        if best_neighbor_fit > cur_fit:
             current_cfg = best_neighbor_cfg
             cur_fit = best_neighbor_fit
             obj = best_neighbor_obj
             print(f"Iteration {iteration}: Improved fitness from {history[-1]:.4f} to {cur_fit:.4f}")
 
             # Update global best if neighbor is better than global best
-            if best_neighbor_fit < best_fit:
+            if best_neighbor_fit > best_fit:
                 best_cfg = copy.deepcopy(best_neighbor_cfg)
                 best_fit = best_neighbor_fit
                 best_obj = dict(best_neighbor_obj)
