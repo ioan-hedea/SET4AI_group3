@@ -25,17 +25,26 @@ No internal policy/model details beyond calling policy(obs, info).
 """
 
 import copy
+import math
 from typing import Dict, Any, List, Tuple, Optional
 
 import numpy as np
 
 from envs.highway_env_utils import run_episode, record_video_episode
 from search.base_search import ScenarioSearch
+from tqdm import trange
 
 
 # ============================================================
 # 1) OBJECTIVES FROM TIME SERIES
 # ============================================================
+
+def is_not_directly_adjacent(ego_pos, other_pos, ego_length):
+    # directly adjacent = other is on the neighboring lane
+    # and its center is within the ego vehicle's length
+    adjacent = abs(other_pos[1] - ego_pos[1]) == 1 and ego_pos[0] - ego_length < other_pos[0] < ego_pos[0] + ego_length
+    return not adjacent
+
 
 def compute_objectives_from_time_series(time_series: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -59,12 +68,31 @@ def compute_objectives_from_time_series(time_series: List[Dict[str, Any]]) -> Di
     NOTE: If you want, you can add more objectives (lane-specific distances, time-to-crash, etc.)
     but keep the keys above at least.
     """
+    # TODO: improve fitness function
+    # extra score for more close encounters
+    # want to make function smoother, so give more points for erratic-like behaviour
+    # lane switching
+    # average change in speed
+    # avg distance to closest vehicles (< 2 car lengths)
+    # number of cars it passes, get passed by
+
     crash_count = 0
     min_distance = float('inf')
+
+    prev_lane_id = None
+    lane_switches = 0
+
+    prev_speed = None
+    speed_changes = []
+
+    prev_cars_behind = 0
+    cars_passed_count = 0
 
     for frame in time_series:
         if frame.get("crashed", False):
             crash_count = 1
+            min_distance = 0.0
+            break
 
         ego = frame.get("ego")
         others = frame.get("others", [])
@@ -80,26 +108,51 @@ def compute_objectives_from_time_series(time_series: List[Dict[str, Any]]) -> Di
                 other_width = other.get("width", 1.8)
 
                 # Compute Euclidean distance between centers
-                center_distance = float(np.linalg.norm(ego_pos - other_pos))
-
-                # Approximate clearance distance (distance between closest edges)
-                # Using half-widths as approximation for safety margin
-                clearance = center_distance - (ego_length / 2 + other_length / 2)
+                # ignore others that are directly adjacent to ego vehicle
+                # while the ego vehicle is moving in a straight line
+                if ego['heading'] != 0 or is_not_directly_adjacent(ego_pos, other_pos, ego_length):
+                    center_distance = float(np.linalg.norm(ego_pos - other_pos))
+                else:
+                    center_distance = float('inf')
 
                 min_distance = min(min_distance, center_distance)
+
+            # lane switching
+            if prev_lane_id is not None and prev_lane_id != ego["lane_id"]:
+                lane_switches += 1
+            prev_lane_id = ego["lane_id"]
+
+            # speed changes
+            if prev_speed is not None:
+                delta_speed = abs(ego["speed"] - prev_speed)
+                speed_changes.append(delta_speed)
+            prev_speed = ego["speed"]
+
+            # TODO: overtaking
 
     if min_distance == float('inf'):
         min_distance = 1000.0  # Default large value if no others
 
+    # erratic speed
+    # higher total speed change => more erratic, braking, accelerations
+    total_speed_change = sum(speed_changes)
+
     return {
         "crash_count": crash_count,
         "min_distance": min_distance,
+        "lane_switches": lane_switches,
+        "speed_change": total_speed_change,
     }
 
 
-def compute_fitness(objectives: Dict[str, Any]) -> float:
+def compute_fitness(
+        objectives: Dict[str, Any],
+        w_distance: float = 50,
+        w_lane_switch: float = 0.1,
+        w_speed_change: float = 0.1
+) -> float:
     """
-    Convert objectives into ONE scalar fitness value to MINIMIZE.
+    Convert objectives into ONE scalar fitness value to MAXIMIZE.
 
     Requirement:
     - Any crashing scenario must be strictly better than any non-crashing scenario.
@@ -112,13 +165,14 @@ def compute_fitness(objectives: Dict[str, Any]) -> float:
     """
     crash_count = objectives.get("crash_count", 0)
     min_distance = objectives.get("min_distance", float('inf'))
+    lane_switches = objectives.get("lane_switches", 0)
+    speed_change = objectives.get("speed_change", 0)
 
     if crash_count > 0:
-        # Crashing scenario is best (we want to minimize fitness)
-        return -1.0
+        # Crashing scenario is best (we want to maximize fitness)
+        return math.inf
     else:
-        # Non-crashing: return min_distance (smaller is better, i.e., closer to crash)
-        return float(min_distance)
+        return w_distance / min_distance + w_lane_switch * lane_switches + w_speed_change * speed_change
 
 
 # ============================================================
@@ -151,36 +205,35 @@ def mutate_config(
     # Create a copy to avoid modifying the original
     new_cfg = copy.deepcopy(cfg)
 
-    # Select a random parameter to mutate
+    # Select random parameters to mutate
     mutable_params = [k for k in param_spec.keys() if k in new_cfg]
 
     if not mutable_params:
         return new_cfg
 
-    param_to_mutate = rng.choice(mutable_params)
-    spec = param_spec[param_to_mutate]
-    param_type = spec.get("type", "float")
-    min_val = spec.get("min", 0)
-    max_val = spec.get("max", 1)
+    num_to_mutate = len(mutable_params) // 2
+    if num_to_mutate == 0 and len(mutable_params) > 0:
+        num_to_mutate = 1
+        
+    params_to_mutate = rng.choice(mutable_params, size=num_to_mutate, replace=False)
 
-    if param_type == "int":
-        # Mutate by adding/subtracting a small integer step
-        step = max(1, (max_val - min_val) // 10)
-        if rng.random() < 0.5:
-            new_val = new_cfg[param_to_mutate] + step
-        else:
-            new_val = new_cfg[param_to_mutate] - step
-        new_val = int(np.clip(new_val, min_val, max_val))
-        new_cfg[param_to_mutate] = new_val
+    for param_to_mutate in params_to_mutate:
+        spec = param_spec[param_to_mutate]
+        param_type = spec.get("type", "float")
+        min_val = spec.get("min", 0)
+        max_val = spec.get("max", 1)
 
-    elif param_type == "float":
-        # Mutate by adding/subtracting a small float step
-        step = (max_val - min_val) * 0.1
-        if rng.random() < 0.5:
-            new_val = new_cfg[param_to_mutate] + step
+        # Gaussian noise with variance given the param's min and max value
+        sigma = (max_val - min_val) / 2
+        noise = rng.normal(0, sigma)
+        new_val = new_cfg[param_to_mutate] + noise
+
+        # Clip and handle types
+        if param_type == "int":
+            new_val = int(np.round(np.clip(new_val, min_val, max_val)))
         else:
-            new_val = new_cfg[param_to_mutate] - step
-        new_val = float(np.clip(new_val, min_val, max_val))
+            new_val = float(np.clip(new_val, min_val, max_val))
+
         new_cfg[param_to_mutate] = new_val
 
     # Ensure initial_lane_id is valid if lanes_count was mutated
@@ -237,13 +290,16 @@ def hill_climb(
     rng = np.random.default_rng(seed)
 
     # Initialize from base_cfg
-    current_cfg = dict(base_cfg)
+    current_cfg = copy.deepcopy(base_cfg)
 
     # Evaluate initial solution
-    seed_base = int(rng.integers(1e9))
+    seed_base = int(rng.integers(0, 2**31 - 1))
     crashed, ts = run_episode(env_id, current_cfg, policy, defaults, seed_base)
     obj = compute_objectives_from_time_series(ts)
-    cur_fit = compute_fitness(obj)
+    if crashed:
+        cur_fit = 100.0
+    else:
+        cur_fit = min(compute_fitness(obj), 100.0)
 
     best_cfg = copy.deepcopy(current_cfg)
     best_obj = dict(obj)
@@ -255,15 +311,15 @@ def hill_climb(
     evaluations = 1
 
     # Hill climbing main loop
-    for iteration in range(iterations):
+    for iteration in trange(iterations):
         # Early stopping if we found a crash
-        if best_fit < 0:  # Crash found (fitness = -1)
+        if best_fit == 100.0:  # Crash found
             print(f" Crash found at iteration {iteration}!")
             break
 
         # Generate and evaluate neighbors
         best_neighbor_cfg = None
-        best_neighbor_fit = float('inf')
+        best_neighbor_fit = -math.inf
         best_neighbor_obj = None
         best_neighbor_seed = None
         best_neighbor_ts = None
@@ -271,32 +327,34 @@ def hill_climb(
         for _ in range(neighbors_per_iter):
             # Generate neighbor
             neighbor_cfg = mutate_config(current_cfg, param_spec, rng)
-            seed_base_neighbor = int(rng.integers(1e9))
 
             # Evaluate neighbor
-            crashed_neighbor, ts_neighbor = run_episode(env_id, neighbor_cfg, policy, defaults, seed_base_neighbor)
+            crashed_neighbor, ts_neighbor = run_episode(env_id, neighbor_cfg, policy, defaults, seed_base)
             obj_neighbor = compute_objectives_from_time_series(ts_neighbor)
-            fit_neighbor = compute_fitness(obj_neighbor)
+            if crashed_neighbor:
+                fit_neighbor = 100.0
+            else:
+                fit_neighbor = min(compute_fitness(obj_neighbor), 100.0)
 
             evaluations += 1
 
             # Track best neighbor
-            if fit_neighbor < best_neighbor_fit:
+            if fit_neighbor > best_neighbor_fit:
                 best_neighbor_fit = fit_neighbor
                 best_neighbor_cfg = copy.deepcopy(neighbor_cfg)
                 best_neighbor_obj = dict(obj_neighbor)
-                best_neighbor_seed = seed_base_neighbor
+                best_neighbor_seed = seed_base
                 best_neighbor_ts = ts_neighbor
 
         # Accept best neighbor if it improves current solution
-        if best_neighbor_fit < cur_fit:
+        if best_neighbor_fit > cur_fit:
             current_cfg = best_neighbor_cfg
             cur_fit = best_neighbor_fit
             obj = best_neighbor_obj
             print(f"Iteration {iteration}: Improved fitness from {history[-1]:.4f} to {cur_fit:.4f}")
 
             # Update global best if neighbor is better than global best
-            if best_neighbor_fit < best_fit:
+            if best_neighbor_fit > best_fit:
                 best_cfg = copy.deepcopy(best_neighbor_cfg)
                 best_fit = best_neighbor_fit
                 best_obj = dict(best_neighbor_obj)
@@ -326,21 +384,40 @@ def hill_climb(
 class HillClimbing(ScenarioSearch):
     """Hill Climbing search class that integrates with the project framework."""
 
-    def run_search(self, n_scenarios=50, n_eval=1, seed=42, iterations=100, neighbors_per_iter=10):
+    def run_search(self, n_scenarios=10, n_eval=10, seed=42):
         """
         Run hill climbing search.
 
         Parameters:
-            n_scenarios: number of independent HC runs (not used in single HC)
-            n_eval: number of evaluations per scenario (not used in HC loop)
+            n_scenarios: number of HC runs (iterations)
+            n_eval: number of neighbors per iteration
             seed: random seed
-            iterations: HC iterations
-            neighbors_per_iter: number of neighbors to evaluate per iteration
 
         Returns:
-            crash_log: list of crashes found
+            Dictionary containing:
+                crash_log: list of crashes found
+                evaluations: total number of run_episode calls
+                total_time: execution time
+                initial_cfg: the starting configuration
+                first_crash_evals: evaluations until first crash (None if no crash)
         """
+        import time
+        start_time = time.time()
         print(f"Running Hill Climbing Search...")
+
+        # Initialize RNG for reproducibility
+        rng = np.random.default_rng(seed)
+        
+        # if base_cfg does not specify params, set them
+        mutable_params = [k for k in self.param_spec.keys() if k in self.base_cfg]
+        if not mutable_params:
+            self.base_cfg.update(
+                ScenarioSearch.sample_random_config(self, rng))
+        
+        initial_cfg = copy.deepcopy(self.base_cfg)
+
+        # Derive a seed for the hill climbing loop
+        hc_seed = int(rng.integers(0, 2**31 - 1))
 
         # Run a single hill climbing session
         result = hill_climb(
@@ -349,23 +426,37 @@ class HillClimbing(ScenarioSearch):
             self.param_spec,
             self.policy,
             self.defaults,
-            seed=seed,
-            iterations=iterations,
-            neighbors_per_iter=neighbors_per_iter,
+            seed=hc_seed,
+            iterations=n_scenarios,
+            neighbors_per_iter=n_eval,
         )
 
         crash_log = []
+        first_crash_evals = None
 
         # Check if we found a crash
-        if result["best_fitness"] < 0:  # Crash found
+        if result["best_fitness"] == 100.0:  # Crash found
             cfg = result["best_cfg"]
             seed_found = result["best_seed_base"]
             print(f" Collision found! Config: {cfg}, Seed: {seed_found}")
             crash_log.append({"cfg": copy.deepcopy(cfg), "seed": seed_found})
+            
+            # Since hill_climb returns total evaluations and stops at first crash if found in main loop
+            # But it might be found in initial eval.
+            # The result['evaluations'] should be accurate for when it stopped.
+            first_crash_evals = result["evaluations"]
 
             # Record video of the crash
             record_video_episode(self.env_id, cfg, self.policy, self.defaults, seed_found, out_dir="videos")
         else:
             print(f"  No crash found. Best fitness: {result['best_fitness']:.4f}")
 
-        return crash_log
+        total_time = time.time() - start_time
+        
+        return {
+            "crash_log": crash_log,
+            "evaluations": result["evaluations"],
+            "total_time": total_time,
+            "initial_cfg": initial_cfg,
+            "first_crash_evals": first_crash_evals
+        }

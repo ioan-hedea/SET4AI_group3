@@ -1,0 +1,284 @@
+{
+  "metrics": {
+    "avg_evals_to_first_crash": 21.555555555555557,
+    "total_crashes_found": 9,
+    "distinct_crashes_found": 9,
+    "avg_time_per_search": 86.9377021074295,
+    "avg_time_per_evaluation": 2.957064697531616,
+    "success_rate": 0.9
+  },
+  "fails": [
+    {
+      "run": 0,
+      "cfg": {
+        "lanes_count": 3,
+        "vehicles_count": 20,
+        "initial_spacing": 3.467401856113558,
+        "ego_spacing": 3.180983842860648,
+        "initial_lane_id": 2,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 1650657918,
+      "initial_cfg": null
+    },
+    {
+      "run": 1,
+      "cfg": {
+        "lanes_count": 9,
+        "vehicles_count": 51,
+        "initial_spacing": 4.881857688086279,
+        "ego_spacing": 3.9668525402782286,
+        "initial_lane_id": 0,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 843301821,
+      "initial_cfg": null
+    },
+    {
+      "run": 2,
+      "cfg": {
+        "lanes_count": 10,
+        "vehicles_count": 23,
+        "initial_spacing": 3.6359231068999103,
+        "ego_spacing": 2.149383492635141,
+        "initial_lane_id": 8,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 1512934210,
+      "initial_cfg": null
+    },
+    {
+      "run": 3,
+      "cfg": {
+        "lanes_count": 4,
+        "vehicles_count": 44,
+        "initial_spacing": 3.6584416735417546,
+        "ego_spacing": 2.5686598495375916,
+        "initial_lane_id": 3,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 2062435471,
+      "initial_cfg": null
+    },
+    {
+      "run": 4,
+      "cfg": {
+        "lanes_count": 9,
+        "vehicles_count": 8,
+        "initial_spacing": 0.9727662269002846,
+        "ego_spacing": 2.1702839829355867,
+        "initial_lane_id": 2,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 700270129,
+      "initial_cfg": null
+    },
+    {
+      "run": 5,
+      "cfg": {
+        "lanes_count": 10,
+        "vehicles_count": 7,
+        "initial_spacing": 1.1483246146581174,
+        "ego_spacing": 1.7683150693280707,
+        "initial_lane_id": 6,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 1517039161,
+      "initial_cfg": null
+    },
+    {
+      "run": 7,
+      "cfg": {
+        "lanes_count": 8,
+        "vehicles_count": 28,
+        "initial_spacing": 2.4096482671198003,
+        "ego_spacing": 1.263157510339422,
+        "initial_lane_id": 4,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 1293362933,
+      "initial_cfg": null
+    },
+    {
+      "run": 8,
+      "cfg": {
+        "lanes_count": 10,
+        "vehicles_count": 21,
+        "initial_spacing": 1.411258994668196,
+        "ego_spacing": 1.5053128892714551,
+        "initial_lane_id": 0,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 341075834,
+      "initial_cfg": null
+    },
+    {
+      "run": 9,
+      "cfg": {
+        "lanes_count": 10,
+        "vehicles_count": 10,
+        "initial_spacing": 2.1205908528668074,
+        "ego_spacing": 1.2762289875571304,
+        "initial_lane_id": 0,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 364883041,
+      "initial_cfg": null
+    }
+  ],
+  "distinct_fails": [
+    {
+      "run": 0,
+      "cfg": {
+        "lanes_count": 3,
+        "vehicles_count": 20,
+        "initial_spacing": 3.467401856113558,
+        "ego_spacing": 3.180983842860648,
+        "initial_lane_id": 2,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 1650657918,
+      "initial_cfg": null
+    },
+    {
+      "run": 1,
+      "cfg": {
+        "lanes_count": 9,
+        "vehicles_count": 51,
+        "initial_spacing": 4.881857688086279,
+        "ego_spacing": 3.9668525402782286,
+        "initial_lane_id": 0,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 843301821,
+      "initial_cfg": null
+    },
+    {
+      "run": 2,
+      "cfg": {
+        "lanes_count": 10,
+        "vehicles_count": 23,
+        "initial_spacing": 3.6359231068999103,
+        "ego_spacing": 2.149383492635141,
+        "initial_lane_id": 8,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 1512934210,
+      "initial_cfg": null
+    },
+    {
+      "run": 3,
+      "cfg": {
+        "lanes_count": 4,
+        "vehicles_count": 44,
+        "initial_spacing": 3.6584416735417546,
+        "ego_spacing": 2.5686598495375916,
+        "initial_lane_id": 3,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 2062435471,
+      "initial_cfg": null
+    },
+    {
+      "run": 4,
+      "cfg": {
+        "lanes_count": 9,
+        "vehicles_count": 8,
+        "initial_spacing": 0.9727662269002846,
+        "ego_spacing": 2.1702839829355867,
+        "initial_lane_id": 2,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 700270129,
+      "initial_cfg": null
+    },
+    {
+      "run": 5,
+      "cfg": {
+        "lanes_count": 10,
+        "vehicles_count": 7,
+        "initial_spacing": 1.1483246146581174,
+        "ego_spacing": 1.7683150693280707,
+        "initial_lane_id": 6,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 1517039161,
+      "initial_cfg": null
+    },
+    {
+      "run": 7,
+      "cfg": {
+        "lanes_count": 8,
+        "vehicles_count": 28,
+        "initial_spacing": 2.4096482671198003,
+        "ego_spacing": 1.263157510339422,
+        "initial_lane_id": 4,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 1293362933,
+      "initial_cfg": null
+    },
+    {
+      "run": 8,
+      "cfg": {
+        "lanes_count": 10,
+        "vehicles_count": 21,
+        "initial_spacing": 1.411258994668196,
+        "ego_spacing": 1.5053128892714551,
+        "initial_lane_id": 0,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 341075834,
+      "initial_cfg": null
+    },
+    {
+      "run": 9,
+      "cfg": {
+        "lanes_count": 10,
+        "vehicles_count": 10,
+        "initial_spacing": 2.1205908528668074,
+        "ego_spacing": 1.2762289875571304,
+        "initial_lane_id": 0,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 364883041,
+      "initial_cfg": null
+    }
+  ]
+}
