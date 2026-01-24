@@ -15,7 +15,7 @@ def main():
     search = HillClimbing(env_id, base_cfg, param_spec, policy, defaults)
     crashes = search.run_search(n_scenarios=20, n_eval=10, seed=16)
 
-    print(f"✅ Found {len(crashes)} crashes.")
+    print(f"✅ Found {len(crashes['crash_log'])} crashes.")
     #if crashes:
     #    print(crashes)
 

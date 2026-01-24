@@ -29,7 +29,7 @@ class PerformanceEvaluator:
         for i in range(n_runs):
             print(f"Run {i+1}/{n_runs}...")
             # Use a different seed for each run
-            seed = 420 + i
+            seed = 450 + i
             
             algo = algo_class(
                 self.env_id, 
@@ -102,9 +102,9 @@ if __name__ == "__main__":
     env_id = "highway-fast-v0"
     policy = load_pretrained_policy("agents/model")
     env, defaults = make_env(env_id)
-    
+
     evaluator = PerformanceEvaluator(env_id, base_cfg, param_spec, policy, defaults)
-    
-    evaluator.run_evaluation(HillClimbing, "Hill Climbing", n_runs=5, n_scenarios=20, n_eval=5)
-    # evaluator.run_evaluation(RandomSearch, "Random Search", n_runs=10, n_scenarios=100)
+
+    evaluator.run_evaluation(HillClimbing, "Hill Climbing", n_runs=7, n_scenarios=10, n_eval=10)
+    evaluator.run_evaluation(RandomSearch, "Random Search", n_runs=7, n_scenarios=100)
 

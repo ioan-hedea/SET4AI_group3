@@ -26,120 +26,129 @@ No internal policy/model details beyond calling policy(obs, info).
 
 import copy
 import math
-from typing import Dict, Any, List, Tuple, Optional
+import time
+from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
+from tqdm import trange
 
+# Project imports
 from envs.highway_env_utils import run_episode, record_video_episode
 from search.base_search import ScenarioSearch
-from tqdm import trange
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def _is_safe_adjacency(ego_pos: np.ndarray, other_pos: np.ndarray, ego_length: float) -> bool:
+    """
+    Determines if a vehicle is directly adjacent (in a neighboring lane) 
+    and within the longitudinal safety shadow of the ego vehicle.
+    Returns True if the 'other' vehicle is strictly adjacent (ignored for distance calc).
+    """
+    # Check lateral distance (approx 1 lane width)
+    is_neighbor_lane = abs(other_pos[1] - ego_pos[1]) == 1
+    # Check longitudinal overlap
+    is_longitudinal_overlap = (ego_pos[0] - ego_length) < other_pos[0] < (ego_pos[0] + ego_length)
+    
+    return is_neighbor_lane and is_longitudinal_overlap
+
+
+def _evaluate_scenario(
+    env_id: str, 
+    cfg: Dict[str, Any], 
+    policy, 
+    defaults: Dict[str, Any], 
+    seed: int
+) -> Tuple[float, Dict[str, Any], bool, List[Dict[str, Any]]]:
+    """
+    Helper to run an episode and calculate fitness/objectives.
+    Reduces code duplication in the search loop.
+    """
+    crashed, time_series = run_episode(env_id, cfg, policy, defaults, seed)
+    objectives = compute_objectives_from_time_series(time_series)
+    
+    # Calculate raw fitness
+    fitness = compute_fitness(objectives)
+    
+    # Cap fitness at 100.0 for stability/plotting, consistent with legacy logic
+    # If crashed, we treat it as max fitness (100.0)
+    if crashed:
+        fitness = 100.0
+    else:
+        fitness = min(fitness, 100.0)
+        
+    return fitness, objectives, crashed, time_series
 
 
 # ============================================================
 # 1) OBJECTIVES FROM TIME SERIES
 # ============================================================
 
-def is_not_directly_adjacent(ego_pos, other_pos, ego_length):
-    # directly adjacent = other is on the neighboring lane
-    # and its center is within the ego vehicle's length
-    adjacent = abs(other_pos[1] - ego_pos[1]) == 1 and ego_pos[0] - ego_length < other_pos[0] < ego_pos[0] + ego_length
-    return not adjacent
-
-
 def compute_objectives_from_time_series(time_series: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Compute your objective values from the recorded time-series.
-
-    The time_series is a list of frames. Each frame typically contains:
-      - frame["crashed"]: bool
-      - frame["ego"]: dict or None, e.g. {"pos":[x,y], "lane_id":..., "length":..., "width":...}
-      - frame["others"]: list of dicts with positions, lane_id, etc.
-
-    Minimum requirements (suggested):
-      - crash_count: 1 if any collision happened, else 0
-      - min_distance: minimum distance between ego and any other vehicle over time (float)
-
-    Return a dictionary, e.g.:
-        {
-          "crash_count": 0 or 1,
-          "min_distance": float
-        }
-
-    NOTE: If you want, you can add more objectives (lane-specific distances, time-to-crash, etc.)
-    but keep the keys above at least.
     """
-    # TODO: improve fitness function
-    # extra score for more close encounters
-    # want to make function smoother, so give more points for erratic-like behaviour
-    # lane switching
-    # average change in speed
-    # avg distance to closest vehicles (< 2 car lengths)
-    # number of cars it passes, get passed by
-
     crash_count = 0
     min_distance = float('inf')
-
-    prev_lane_id = None
+    
     lane_switches = 0
-
+    total_speed_change = 0.0
+    
+    # State trackers
+    prev_lane_id = None
     prev_speed = None
-    speed_changes = []
-
-    prev_cars_behind = 0
-    cars_passed_count = 0
 
     for frame in time_series:
+        # 1. Check Crash
         if frame.get("crashed", False):
             crash_count = 1
             min_distance = 0.0
-            break
+            break # Stop processing if crashed
 
         ego = frame.get("ego")
         others = frame.get("others", [])
 
-        if ego is not None and ego["pos"] is not None:
-            ego_pos = np.array(ego["pos"])
-            ego_length = ego.get("length", 4.5)
-            ego_width = ego.get("width", 1.8)
+        if not ego or ego.get("pos") is None:
+            continue
 
-            for other in others:
-                other_pos = np.array(other["pos"])
-                other_length = other.get("length", 4.5)
-                other_width = other.get("width", 1.8)
+        ego_pos = np.array(ego["pos"])
+        ego_length = ego.get("length", 5.0)
+        ego_heading = ego.get("heading", 0.0)
 
-                # Compute Euclidean distance between centers
-                # ignore others that are directly adjacent to ego vehicle
-                # while the ego vehicle is moving in a straight line
-                if ego['heading'] != 0 or is_not_directly_adjacent(ego_pos, other_pos, ego_length):
-                    center_distance = float(np.linalg.norm(ego_pos - other_pos))
-                else:
-                    center_distance = float('inf')
+        # 2. Update Min Distance
+        for other in others:
+            other_pos = np.array(other["pos"])
+            
+            # We ignore distance calculations if the ego is driving straight 
+            # and the other car is directly alongside (passing/being passed).
+            should_ignore = (ego_heading == 0) and _is_safe_adjacency(ego_pos, other_pos, ego_length)
+            
+            if not should_ignore:
+                dist = np.linalg.norm(ego_pos - other_pos)
+                if dist < min_distance:
+                    min_distance = dist
 
-                min_distance = min(min_distance, center_distance)
+        # 3. Track Lane Switches
+        current_lane = ego.get("lane_id")
+        if prev_lane_id is not None and current_lane != prev_lane_id:
+            lane_switches += 1
+        prev_lane_id = current_lane
 
-            # lane switching
-            if prev_lane_id is not None and prev_lane_id != ego["lane_id"]:
-                lane_switches += 1
-            prev_lane_id = ego["lane_id"]
+        # 4. Track Speed Changes (erratic driving)
+        current_speed = ego.get("speed", 0.0)
+        if prev_speed is not None:
+            total_speed_change += abs(current_speed - prev_speed)
+        prev_speed = current_speed
 
-            # speed changes
-            if prev_speed is not None:
-                delta_speed = abs(ego["speed"] - prev_speed)
-                speed_changes.append(delta_speed)
-            prev_speed = ego["speed"]
-
-            # TODO: overtaking
-
+    # Fallback if no valid distance was found (e.g. empty road)
     if min_distance == float('inf'):
-        min_distance = 1000.0  # Default large value if no others
-
-    # erratic speed
-    # higher total speed change => more erratic, braking, accelerations
-    total_speed_change = sum(speed_changes)
+        min_distance = 1000.0
 
     return {
         "crash_count": crash_count,
-        "min_distance": min_distance,
+        "min_distance": float(min_distance),
         "lane_switches": lane_switches,
         "speed_change": total_speed_change,
     }
@@ -153,26 +162,23 @@ def compute_fitness(
 ) -> float:
     """
     Convert objectives into ONE scalar fitness value to MAXIMIZE.
-
-    Requirement:
-    - Any crashing scenario must be strictly better than any non-crashing scenario.
-
-    Examples:
-    - If crash_count==1: fitness = -1 (best)
-    - Else: fitness = min_distance (smaller is better)
-
-    You can design a more refined scalarization if desired.
     """
     crash_count = objectives.get("crash_count", 0)
-    min_distance = objectives.get("min_distance", float('inf'))
+    min_dist = objectives.get("min_distance", 1e-6) # Avoid div by zero
     lane_switches = objectives.get("lane_switches", 0)
     speed_change = objectives.get("speed_change", 0)
 
+    # Primary Goal: Crash
     if crash_count > 0:
-        # Crashing scenario is best (we want to maximize fitness)
         return math.inf
-    else:
-        return w_distance / min_distance + w_lane_switch * lane_switches + w_speed_change * speed_change
+
+    # Secondary Goal: Minimize distance (Maximize 1/distance)
+    # Penalize erratic behavior (lane switches, jerky speed) slightly
+    fitness = (w_distance / min_dist) + \
+              (w_lane_switch * lane_switches) + \
+              (w_speed_change * speed_change)
+              
+    return fitness
 
 
 # ============================================================
@@ -186,60 +192,47 @@ def mutate_config(
 ) -> Dict[str, Any]:
     """
     Generate ONE neighbor configuration by mutating the current scenario.
-
-    Inputs:
-      - cfg: current scenario dict (e.g., vehicles_count, initial_spacing, ego_spacing, initial_lane_id)
-      - param_spec: search space bounds, types (int/float), min/max
-      - rng: random generator
-
-    Requirements:
-      - Do NOT modify cfg in-place (return a copy).
-      - Keep mutated values within [min, max] from param_spec.
-      - If you mutate lanes_count, keep initial_lane_id valid (0..lanes_count-1).
-
-    Students can implement:
-      - single-parameter mutation (recommended baseline)
-      - multiple-parameter mutation
-      - adaptive step sizes, etc.
     """
-    # Create a copy to avoid modifying the original
     new_cfg = copy.deepcopy(cfg)
-
-    # Select random parameters to mutate
-    mutable_params = [k for k in param_spec.keys() if k in new_cfg]
-
-    if not mutable_params:
+    
+    # Identify which parameters exist in the current config
+    valid_params = [k for k in param_spec.keys() if k in new_cfg]
+    if not valid_params:
         return new_cfg
 
-    num_to_mutate = len(mutable_params) // 2
-    if num_to_mutate == 0 and len(mutable_params) > 0:
-        num_to_mutate = 1
+    # Determine how many parameters to mutate (Heuristic: half available, at least 1)
+    num_to_mutate = max(1, len(valid_params) // 2)
+    params_to_mutate = rng.choice(valid_params, size=num_to_mutate, replace=False)
+
+    for param_key in params_to_mutate:
+        spec = param_spec[param_key]
+        p_type = spec.get("type", "float")
+        p_min = spec.get("min", 0)
+        p_max = spec.get("max", 1)
         
-    params_to_mutate = rng.choice(mutable_params, size=num_to_mutate, replace=False)
-
-    for param_to_mutate in params_to_mutate:
-        spec = param_spec[param_to_mutate]
-        param_type = spec.get("type", "float")
-        min_val = spec.get("min", 0)
-        max_val = spec.get("max", 1)
-
-        # Gaussian noise with variance given the param's min and max value
-        sigma = (max_val - min_val) / 2
+        current_val = new_cfg[param_key]
+        
+        # Mutation Logic: Add Gaussian noise
+        # Sigma is set to cover half the range, allowing for large jumps
+        sigma = (p_max - p_min) / 2.0
         noise = rng.normal(0, sigma)
-        new_val = new_cfg[param_to_mutate] + noise
+        
+        mutated_val = current_val + noise
+        
+        # Clip to bounds
+        mutated_val = np.clip(mutated_val, p_min, p_max)
 
-        # Clip and handle types
-        if param_type == "int":
-            new_val = int(np.round(np.clip(new_val, min_val, max_val)))
+        # Cast to correct type
+        if p_type == "int":
+            new_cfg[param_key] = int(round(mutated_val))
         else:
-            new_val = float(np.clip(new_val, min_val, max_val))
+            new_cfg[param_key] = float(mutated_val)
 
-        new_cfg[param_to_mutate] = new_val
-
-    # Ensure initial_lane_id is valid if lanes_count was mutated
+    # Constraint Maintenance: 
+    # initial_lane_id must be valid within lanes_count
     if "lanes_count" in new_cfg and "initial_lane_id" in new_cfg:
-        lanes = new_cfg["lanes_count"]
-        new_cfg["initial_lane_id"] = int(np.clip(new_cfg["initial_lane_id"], 0, lanes - 1))
+        max_lane_index = new_cfg["lanes_count"] - 1
+        new_cfg["initial_lane_id"] = int(np.clip(new_cfg["initial_lane_id"], 0, max_lane_index))
 
     return new_cfg
 
@@ -257,206 +250,187 @@ def hill_climb(
     seed: int = 0,
     iterations: int = 100,
     neighbors_per_iter: int = 10,
+    patience: int = 3
 ) -> Dict[str, Any]:
     """
     Hill climbing loop.
-
-    You should:
-      1) Start from an initial scenario (base_cfg or random sample).
-      2) Evaluate it by running:
-            crashed, ts = run_episode(env_id, cfg, policy, defaults, seed_base)
-         Then compute objectives + fitness.
-      3) For each iteration:
-            - Generate neighbors_per_iter neighbors using mutate_config
-            - Evaluate each neighbor
-            - Select the best neighbor
-            - Accept it if it improves fitness (or implement another acceptance rule)
-            - Optionally stop early if a crash is found
-      4) Return the best scenario found and enough info to reproduce.
-
-    Return dict MUST contain at least:
-        {
-          "best_cfg": Dict[str, Any],
-          "best_objectives": Dict[str, Any],
-          "best_fitness": float,
-          "best_seed_base": int,
-          "history": List[float]
-        }
-
-    Optional but useful:
-        - "best_time_series": ts
-        - "evaluations": int
     """
     rng = np.random.default_rng(seed)
 
-    # Initialize from base_cfg
+    # 1. Initialization
     current_cfg = copy.deepcopy(base_cfg)
+    episode_seed = int(rng.integers(0, 2**31 - 1))
+    
+    # Initial Evaluation
+    cur_fit, cur_obj, _, cur_ts = _evaluate_scenario(env_id, current_cfg, policy, defaults, episode_seed)
 
-    # Evaluate initial solution
-    seed_base = int(rng.integers(0, 2**31 - 1))
-    crashed, ts = run_episode(env_id, current_cfg, policy, defaults, seed_base)
-    obj = compute_objectives_from_time_series(ts)
-    if crashed:
-        cur_fit = 100.0
-    else:
-        cur_fit = min(compute_fitness(obj), 100.0)
-
+    # Track Global Best
     best_cfg = copy.deepcopy(current_cfg)
-    best_obj = dict(obj)
-    best_fit = float(cur_fit)
-    best_seed_base = seed_base
-    best_time_series = ts
-
+    best_obj = cur_obj
+    best_fit = cur_fit
+    best_ts = cur_ts
+    
     history = [best_fit]
-    evaluations = 1
+    eval_count = 1
+    no_improvement_counter = 0
 
-    # Hill climbing main loop
-    for iteration in trange(iterations):
-        # Early stopping if we found a crash
-        if best_fit == 100.0:  # Crash found
-            print(f" Crash found at iteration {iteration}!")
+    # 2. Search Loop
+    pbar = trange(iterations, desc="Hill Climbing")
+    for _ in pbar:
+        # Stop immediately if we found a crash (fitness >= 100)
+        if best_fit >= 100.0:
+            pbar.set_description("Crash Found!")
             break
 
-        # Generate and evaluate neighbors
-        best_neighbor_cfg = None
-        best_neighbor_fit = -math.inf
-        best_neighbor_obj = None
-        best_neighbor_seed = None
-        best_neighbor_ts = None
+        # Generate and Evaluate Neighbors
+        iter_best_fit = -math.inf
+        iter_best_cfg = None
+        iter_best_obj = None
+        iter_best_ts = None
 
         for _ in range(neighbors_per_iter):
-            # Generate neighbor
+            # Create Neighbor
             neighbor_cfg = mutate_config(current_cfg, param_spec, rng)
+            
+            # Evaluate Neighbor
+            fit, obj, crashed, ts = _evaluate_scenario(env_id, neighbor_cfg, policy, defaults, episode_seed)
+            eval_count += 1
 
-            # Evaluate neighbor
-            crashed_neighbor, ts_neighbor = run_episode(env_id, neighbor_cfg, policy, defaults, seed_base)
-            obj_neighbor = compute_objectives_from_time_series(ts_neighbor)
-            if crashed_neighbor:
-                fit_neighbor = 100.0
-            else:
-                fit_neighbor = min(compute_fitness(obj_neighbor), 100.0)
+            # Keep track of the best neighbor in this batch
+            if fit > iter_best_fit:
+                iter_best_fit = fit
+                iter_best_cfg = neighbor_cfg
+                iter_best_obj = obj
+                iter_best_ts = ts
+                
+            # Micro-optimization: if we found a crash in neighbors, stop generating neighbors
+            if crashed:
+                break
 
-            evaluations += 1
-
-            # Track best neighbor
-            if fit_neighbor > best_neighbor_fit:
-                best_neighbor_fit = fit_neighbor
-                best_neighbor_cfg = copy.deepcopy(neighbor_cfg)
-                best_neighbor_obj = dict(obj_neighbor)
-                best_neighbor_seed = seed_base
-                best_neighbor_ts = ts_neighbor
-
-        # Accept best neighbor if it improves current solution
-        if best_neighbor_fit > cur_fit:
-            current_cfg = best_neighbor_cfg
-            cur_fit = best_neighbor_fit
-            obj = best_neighbor_obj
-            print(f"Iteration {iteration}: Improved fitness from {history[-1]:.4f} to {cur_fit:.4f}")
-
-            # Update global best if neighbor is better than global best
-            if best_neighbor_fit > best_fit:
-                best_cfg = copy.deepcopy(best_neighbor_cfg)
-                best_fit = best_neighbor_fit
-                best_obj = dict(best_neighbor_obj)
-                best_seed_base = best_neighbor_seed
-                best_time_series = best_neighbor_ts
+        # 3. Selection & Updates
+        if iter_best_fit > cur_fit:
+            # Improvement found: Move current state
+            current_cfg = iter_best_cfg
+            cur_fit = iter_best_fit
+            cur_obj = iter_best_obj
+            # Note: We don't update episode_seed
+            
+            no_improvement_counter = 0
+            
+            # Update Global Best
+            if cur_fit > best_fit:
+                best_fit = cur_fit
+                best_cfg = copy.deepcopy(current_cfg)
+                best_obj = cur_obj
+                best_ts = iter_best_ts
 
         else:
-            print(f"Iteration {iteration}: No improvement (best fitness: {best_fit:.4f})")
+            # No improvement
+            no_improvement_counter += 1
+            
+            # Restart Mechanism
+            if no_improvement_counter >= patience:
+                # Restart from a random configuration
+                temp_search = ScenarioSearch(env_id, base_cfg, param_spec, policy, defaults)
+                current_cfg = temp_search.sample_random_config(rng)
+                
+                # Re-evaluate new start point
+                cur_fit, cur_obj, crashed, cur_ts = _evaluate_scenario(env_id, current_cfg, policy, defaults, episode_seed)
+                eval_count += 1
+                
+                no_improvement_counter = 0
+                
+                # If random restart is lucky and better than global best
+                if cur_fit > best_fit:
+                    best_fit = cur_fit
+                    best_cfg = copy.deepcopy(current_cfg)
+                    best_obj = cur_obj
+                    best_ts = cur_ts
 
         history.append(best_fit)
+        pbar.set_postfix({"Best Fit": f"{best_fit:.2f}", "Curr Fit": f"{cur_fit:.2f}"})
 
     return {
         "best_cfg": best_cfg,
         "best_objectives": best_obj,
         "best_fitness": best_fit,
-        "best_seed_base": best_seed_base,
-        "best_time_series": best_time_series,
+        "best_seed_base": episode_seed,
+        "best_time_series": best_ts,
         "history": history,
-        "evaluations": evaluations,
+        "evaluations": eval_count,
     }
 
 
 # ============================================================
-# 4) HILLCLIMBING CLASS (for integration with framework)
+# 4) HILLCLIMBING CLASS (Integration)
 # ============================================================
 
 class HillClimbing(ScenarioSearch):
     """Hill Climbing search class that integrates with the project framework."""
 
-    def run_search(self, n_scenarios=10, n_eval=10, seed=42):
+    def run_search(self, n_scenarios=50, n_eval=1, seed=42) -> Dict[str, Any]:
         """
         Run hill climbing search.
-
-        Parameters:
-            n_scenarios: number of HC runs (iterations)
-            n_eval: number of neighbors per iteration
-            seed: random seed
-
+        
         Returns:
-            Dictionary containing:
-                crash_log: list of crashes found
-                evaluations: total number of run_episode calls
-                total_time: execution time
-                initial_cfg: the starting configuration
-                first_crash_evals: evaluations until first crash (None if no crash)
+            Dictionary with crash logs, metrics, and timing info.
         """
-        import time
         start_time = time.time()
-        print(f"Running Hill Climbing Search...")
+        print(f"Running Hill Climbing Search (Iter={n_scenarios}, Neighbors={n_eval})...")
 
-        # Initialize RNG for reproducibility
         rng = np.random.default_rng(seed)
         
-        # if base_cfg does not specify params, set them
-        mutable_params = [k for k in self.param_spec.keys() if k in self.base_cfg]
-        if not mutable_params:
-            self.base_cfg.update(
-                ScenarioSearch.sample_random_config(self, rng))
+        # Ensure base_cfg is populated
+        if not any(k in self.base_cfg for k in self.param_spec):
+             self.base_cfg.update(self.sample_random_config(rng))
         
         initial_cfg = copy.deepcopy(self.base_cfg)
-
-        # Derive a seed for the hill climbing loop
         hc_seed = int(rng.integers(0, 2**31 - 1))
 
-        # Run a single hill climbing session
+        # Execute Search
         result = hill_climb(
-            self.env_id,
-            self.base_cfg,
-            self.param_spec,
-            self.policy,
-            self.defaults,
+            env_id=self.env_id,
+            base_cfg=self.base_cfg,
+            param_spec=self.param_spec,
+            policy=self.policy,
+            defaults=self.defaults,
             seed=hc_seed,
             iterations=n_scenarios,
             neighbors_per_iter=n_eval,
         )
 
+        # Process Results
         crash_log = []
         first_crash_evals = None
-
-        # Check if we found a crash
-        if result["best_fitness"] == 100.0:  # Crash found
-            cfg = result["best_cfg"]
-            seed_found = result["best_seed_base"]
-            print(f" Collision found! Config: {cfg}, Seed: {seed_found}")
-            crash_log.append({"cfg": copy.deepcopy(cfg), "seed": seed_found})
+        
+        if result["best_fitness"] >= 100.0:
+            print(f"Collision found! Fitness: {result['best_fitness']}")
             
-            # Since hill_climb returns total evaluations and stops at first crash if found in main loop
-            # But it might be found in initial eval.
-            # The result['evaluations'] should be accurate for when it stopped.
+            crash_entry = {
+                "cfg": result["best_cfg"], 
+                "seed": result["best_seed_base"]
+            }
+            crash_log.append(crash_entry)
+            
+            # Since we stop exactly when we find a crash, total evaluations = first_crash_evals
             first_crash_evals = result["evaluations"]
 
-            # Record video of the crash
-            record_video_episode(self.env_id, cfg, self.policy, self.defaults, seed_found, out_dir="videos")
+            # Save Replay
+            record_video_episode(
+                self.env_id, 
+                result["best_cfg"], 
+                self.policy, 
+                self.defaults, 
+                result["best_seed_base"], 
+                out_dir="videos"
+            )
         else:
-            print(f"  No crash found. Best fitness: {result['best_fitness']:.4f}")
+            print(f"No crash found. Best Fitness: {result['best_fitness']:.4f}")
 
-        total_time = time.time() - start_time
-        
         return {
             "crash_log": crash_log,
             "evaluations": result["evaluations"],
-            "total_time": total_time,
+            "total_time": time.time() - start_time,
             "initial_cfg": initial_cfg,
             "first_crash_evals": first_crash_evals
         }
