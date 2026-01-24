@@ -108,22 +108,7 @@ def top1_label_prob_keras(model, image_hwc_255: np.ndarray):
 # ============================================================
 # 1. FITNESS FUNCTION (margin-based, smoother signal)
 # ============================================================
-def compute_fitness(
-    image_array: np.ndarray,
-    model,
-    target_label: str
-) -> float:
-    """
-    Untargeted black-box fitness (LOWER is better).
-
-    Margin fitness:
-        fitness = p(true) - max_{k != true} p(k)
-
-    Properties:
-      - fitness < 0  => already misclassified (success)
-      - more negative => more confident wrong classification
-      - provides strong ranking signal both before and after crossing boundary
-    """
+def compute_fitness(image_array: np.ndarray, model, target_label: str) -> float:
     global HC_QUERY_COUNT
     HC_QUERY_COUNT += 1
 
@@ -135,15 +120,20 @@ def compute_fitness(
     if x.ndim == 3:
         x = np.expand_dims(x, axis=0)
 
-    probs = model.predict(preprocess_input(x.copy()), verbose=0)[0]  # (1000,)
+    probs = model.predict(preprocess_input(x.copy()), verbose=0)[0]
 
     p_true = float(probs[true_idx])
+    top1 = int(np.argmax(probs))
+    p_top1 = float(probs[top1])
 
-    # Best competing class probability
-    # (avoid delete allocation with a copy trick)
-    probs_copy = probs.copy()
-    probs_copy[true_idx] = -1.0
-    p_best_other = float(np.max(probs_copy))
+    if top1 != true_idx:
+        # best other is already the top1
+        p_best_other = p_top1
+    else:
+        # need second best; do a copy only in this case
+        probs2 = probs.copy()
+        probs2[true_idx] = -1.0
+        p_best_other = float(np.max(probs2))
 
     return p_true - p_best_other
 
@@ -331,6 +321,7 @@ def hill_climb(
     iters_per = max(40, iterations // R)
 
     total_iters_used = 0
+    MAX_QUERIES = 2000
 
     for r in range(R):
         # Random start inside ε-ball around init
@@ -348,9 +339,11 @@ def hill_climb(
         Tend = 0.02
 
         no_improve = 0
-        patience = max(40, iters_per // 2)
-
+        patience = max(20, iters_per // 3)
         for it in range(iters_per):
+            if HC_QUERY_COUNT >= MAX_QUERIES:
+                HC_LAST_ITERS = total_iters_used
+                return best_overall, float(best_overall_fit)
             total_iters_used += 1
 
             # Generate neighbors around current
