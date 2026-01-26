@@ -201,7 +201,7 @@ def mutate_config(
         return new_cfg
 
     # Determine how many parameters to mutate (Heuristic: half available, at least 1)
-    num_to_mutate = max(1, len(valid_params) // 2)
+    num_to_mutate = 1 + len(valid_params) // 2 
     params_to_mutate = rng.choice(valid_params, size=num_to_mutate, replace=False)
 
     for param_key in params_to_mutate:
@@ -250,10 +250,36 @@ def hill_climb(
     seed: int = 0,
     iterations: int = 100,
     neighbors_per_iter: int = 10,
-    patience: int = 3
+    patience: int = 2
 ) -> Dict[str, Any]:
     """
     Hill climbing loop.
+
+    You should:
+      1) Start from an initial scenario (base_cfg or random sample).
+      2) Evaluate it by running:
+            crashed, ts = run_episode(env_id, cfg, policy, defaults, seed_base)
+         Then compute objectives + fitness.
+      3) For each iteration:
+            - Generate neighbors_per_iter neighbors using mutate_config
+            - Evaluate each neighbor
+            - Select the best neighbor
+            - Accept it if it improves fitness (or implement another acceptance rule)
+            - Optionally stop early if a crash is found
+      4) Return the best scenario found and enough info to reproduce.
+
+    Return dict MUST contain at least:
+        {
+          "best_cfg": Dict[str, Any],
+          "best_objectives": Dict[str, Any],
+          "best_fitness": float,
+          "best_seed_base": int,
+          "history": List[float]
+        }
+
+    Optional but useful:
+        - "best_time_series": ts
+        - "evaluations": int
     """
     rng = np.random.default_rng(seed)
 
@@ -368,7 +394,7 @@ def hill_climb(
 class HillClimbing(ScenarioSearch):
     """Hill Climbing search class that integrates with the project framework."""
 
-    def run_search(self, n_scenarios=50, n_eval=1, seed=42) -> Dict[str, Any]:
+    def run_search(self, n_scenarios=50, n_eval=1, seed=42, patience=2) -> Dict[str, Any]:
         """
         Run hill climbing search.
         
@@ -397,6 +423,7 @@ class HillClimbing(ScenarioSearch):
             seed=hc_seed,
             iterations=n_scenarios,
             neighbors_per_iter=n_eval,
+            patience=patience
         )
 
         # Process Results
@@ -432,5 +459,6 @@ class HillClimbing(ScenarioSearch):
             "evaluations": result["evaluations"],
             "total_time": time.time() - start_time,
             "initial_cfg": initial_cfg,
-            "first_crash_evals": first_crash_evals
+            "first_crash_evals": first_crash_evals,
+            "best_fitness": result["best_fitness"]
         }

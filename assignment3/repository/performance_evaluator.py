@@ -20,16 +20,17 @@ class PerformanceEvaluator:
         self.defaults = defaults
         self.results = {}
 
-    def run_evaluation(self, algo_class: Type, name: str, n_runs: int = 10, n_scenarios: int = 10, n_eval: int = 10):
+    def run_evaluation(self, algo_class: Type, name: str, seed_base: int = 420, n_runs: int = 11, n_scenarios: int = 16, n_eval: int = 1, **kwargs):
         print(f"\n--- Evaluating {name} over {n_runs} runs ---")
         
         runs_data = []
         all_fails = []
+        per_run_records = []
         
         for i in range(n_runs):
             print(f"Run {i+1}/{n_runs}...")
             # Use a different seed for each run
-            seed = 450 + i
+            seed = seed_base + i
             
             algo = algo_class(
                 self.env_id, 
@@ -39,8 +40,18 @@ class PerformanceEvaluator:
                 self.defaults
             )
             
-            result = algo.run_search(seed=seed, n_scenarios=n_scenarios, n_eval=n_eval)
+            result = algo.run_search(seed=seed, n_scenarios=n_scenarios, n_eval=n_eval, **kwargs)
             runs_data.append(result)
+            
+            # Record per-run stats
+            run_record = {
+                "run": i,
+                "evaluations": result["evaluations"],
+                "total_time": result["total_time"],
+            }
+            if "best_fitness" in result:
+                run_record["best_fitness"] = result["best_fitness"]
+            per_run_records.append(run_record)
             
             for crash in result.get("crash_log", []):
                 all_fails.append({
@@ -77,7 +88,8 @@ class PerformanceEvaluator:
         self.results[name] = {
             "metrics": metrics,
             "fails": all_fails,
-            "distinct_fails": distinct_fails
+            "distinct_fails": distinct_fails,
+            "per_run_stats": per_run_records
         }
         
         self._print_metrics(name, metrics)
@@ -105,6 +117,14 @@ if __name__ == "__main__":
 
     evaluator = PerformanceEvaluator(env_id, base_cfg, param_spec, policy, defaults)
 
-    evaluator.run_evaluation(HillClimbing, "Hill Climbing", n_runs=7, n_scenarios=10, n_eval=10)
-    evaluator.run_evaluation(RandomSearch, "Random Search", n_runs=7, n_scenarios=100)
-
+    evaluator.run_evaluation(HillClimbing, "Hill Climbing", seed_base=0, n_scenarios=50, n_eval=2, patience=3)
+    evaluator.run_evaluation(HillClimbing, "Hill Climbing", seed_base=31, n_scenarios=33, n_eval=3, patience=3)
+    evaluator.run_evaluation(HillClimbing, "Hill Climbing", seed_base=31 * 2, n_scenarios=25, n_eval=4)
+    evaluator.run_evaluation(HillClimbing, "Hill Climbing", seed_base=31 * 3, n_scenarios=20, n_eval=5)
+    evaluator.run_evaluation(HillClimbing, "Hill Climbing", seed_base=31 * 4, n_scenarios=17, n_eval=6)
+    evaluator.run_evaluation(HillClimbing, "Hill Climbing", seed_base=31 * 5, n_scenarios=14, n_eval=7)
+    evaluator.run_evaluation(HillClimbing, "Hill Climbing", seed_base=31 * 6, n_scenarios=13, n_eval=8)
+    evaluator.run_evaluation(HillClimbing, "Hill Climbing", seed_base=31 * 7, n_scenarios=11, n_eval=9)
+    evaluator.run_evaluation(HillClimbing, "Hill Climbing", seed_base=31 * 8, n_scenarios=10, n_eval=10)
+    
+    evaluator.run_evaluation(RandomSearch, "Random Search", n_runs=50, n_scenarios=100)
