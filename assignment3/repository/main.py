@@ -1,3 +1,4 @@
+from assignment3.repository.search.hill_climbing import HillClimbing
 from config.search_space import param_spec, base_cfg
 from policies.pretrained_policy import load_pretrained_policy
 from envs.highway_env_utils import make_env
@@ -7,11 +8,14 @@ def main():
     env_id = "highway-fast-v0"
     policy = load_pretrained_policy("agents/model")
     env, defaults = make_env(env_id)
+    
+    # search = RandomSearch(env_id, base_cfg, param_spec, policy, defaults)
+    # crashes = search.run_search(n_scenarios=50, seed=11)
+    
+    search = HillClimbing(env_id, base_cfg, param_spec, policy, defaults)
+    crashes = search.run_search(n_scenarios=20, n_eval=10, seed=16)
 
-    search = RandomSearch(env_id, base_cfg, param_spec, policy, defaults)
-    crashes = search.run_search(n_scenarios=50, seed=11)
-
-    print(f"✅ Found {len(crashes)} crashes.")
+    print(f"✅ Found {len(crashes['crash_log'])} crashes.")
     #if crashes:
     #    print(crashes)
 

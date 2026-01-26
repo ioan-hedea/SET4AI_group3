@@ -1,0 +1,50 @@
+{
+  "metrics": {
+    "avg_evals_to_first_crash": 43.0,
+    "total_crashes_found": 1,
+    "distinct_crashes_found": 1,
+    "avg_time_per_search": 110.42004084587097,
+    "avg_time_per_evaluation": 2.567907926648162,
+    "success_rate": 1.0
+  },
+  "fails": [
+    {
+      "run": 0,
+      "cfg": {
+        "lanes_count": 7,
+        "vehicles_count": 13,
+        "initial_spacing": 1.7212510953323967,
+        "ego_spacing": 3.7271184552099217,
+        "initial_lane_id": 6,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 1035104893,
+      "initial_cfg": null
+    }
+  ],
+  "distinct_fails": [
+    {
+      "run": 0,
+      "cfg": {
+        "lanes_count": 7,
+        "vehicles_count": 13,
+        "initial_spacing": 1.7212510953323967,
+        "ego_spacing": 3.7271184552099217,
+        "initial_lane_id": 6,
+        "duration": 30,
+        "simulation_frequency": 25,
+        "policy_frequency": 5
+      },
+      "seed": 1035104893,
+      "initial_cfg": null
+    }
+  ],
+  "per_run_stats": [
+    {
+      "run": 0,
+      "evaluations": 43
+    }
+  ]
+}
