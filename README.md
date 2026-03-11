@@ -1,29 +1,34 @@
-# SET4AI_group3
+# Overview
 
-A collection of experiments, notebooks and supporting code for the SET4AI group project (Group 3). This repository contains analysis, model experiments and supporting Python code.
----
+This repository is dedicated to the coursework in Software Engineering and Testing for AI Systems, focusing on three major assignments:
 
+## Major Assignments
 
-## Project overview
+1. **Metamorphic Testing & AI Bias**  
+   This assignment investigates how metamorphic testing can be employed to evaluate AI systems and the implications of AI bias on such evaluations. Students will explore methods to detect and mitigate bias in AI models.
 
-This repository holds the deliverables and working materials for Group 3 of the DSAIT4015 module. It contains exploratory analysis, experiment notebooks, model training/evaluation code and lightweight utilities used to support the work.
+2. **Adversarial Attacks & Hill-Climbing Search**  
+   Focused on the security aspects of AI systems, this assignment delves into adversarial attacks and utilizes hill-climbing search strategies to enhance the robustness of AI models against such threats.
 
-Goals
-- Provide clear, reproducible notebooks that document experiments.
-- Keep reusable logic in Python modules to support testing and reuse.
-- Demonstrate software engineering and testing practices applied to AI/ML experiments.
+3. **RL Agent Testing & Scenario Search**  
+   This assignment examines reinforcement learning agents and develops test scenarios to validate their performance and safety in various situations. Scenario search techniques will be applied to evaluate the agents comprehensively.
 
----
+## Course Details
 
-## Repository layout
+The course covers essential methodologies in software engineering, emphasizing testing techniques tailored for AI systems. It is designed to provide practical skills and theoretical knowledge, ensuring that students can effectively manage and evaluate AI projects.
 
-A suggested (and commonly used) layout — actual folders/files may vary:
+## Key Technologies
 
-- `notebooks/` — Jupyter notebooks with experiments, visualisations and narrative.
-- `src/` — Python package / helper modules (reusable code used by notebooks).
-- `data/` — Data directory (raw/processed). NOTE: large or sensitive files may be kept out of repo.
-- `reports/` — Figures, PDF reports and presentation materials.
-- `tests/` — Unit and integration tests (pytest).
-- `requirements.txt` — Python dependencies for pip.
-- `environment.yml` — Conda environment (optional).
-- `README.md`, `LICENSE`, `CONTRIBUTING.md` — repository metadata.
+- **Python:** The primary programming language used for implementing assignments and testing frameworks.
+- **TensorFlow and PyTorch:** These frameworks are employed for building and training AI models as well as conducting tests.
+- **Git and GitHub:** Version control and collaborative features are utilized for project management and code sharing.
+
+## Project Structure
+
+The project is organized to facilitate easy navigation and understanding. Key directories include:
+
+- `/assignments`: Contains all assignment-related code and documentation.
+- `/tests`: Includes test scripts and related utilities for all assignments.
+- `/resources`: Holds external resources and libraries used in projects.
+
+Please explore each section for detailed insights into the assignments and technologies employed in this course.
